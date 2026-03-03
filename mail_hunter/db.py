@@ -5,8 +5,56 @@ from mail_hunter.config import load_config
 _db = None
 
 SCHEMA = """
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
+CREATE TABLE IF NOT EXISTS servers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL DEFAULT 993,
+    username TEXT NOT NULL,
+    password TEXT NOT NULL DEFAULT '',
+    use_ssl INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS folders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    UNIQUE(server_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS mails (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
+    uid TEXT,
+    message_id TEXT,
+    subject TEXT,
+    from_name TEXT,
+    from_addr TEXT,
+    to_addr TEXT,
+    date TEXT,
+    size INTEGER,
+    unread INTEGER NOT NULL DEFAULT 0,
+    body_preview TEXT,
+    attachment_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mail_id INTEGER NOT NULL REFERENCES mails(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    content_type TEXT,
+    size INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mail_id INTEGER NOT NULL REFERENCES mails(id) ON DELETE CASCADE,
+    tag TEXT NOT NULL,
+    UNIQUE(mail_id, tag)
+);
 """
 
 
@@ -25,11 +73,88 @@ async def get_db() -> aiosqlite.Connection:
     return _db
 
 
+MIGRATIONS = [
+    # mails columns
+    ("mails", "content_hash", "ALTER TABLE mails ADD COLUMN content_hash TEXT"),
+    (
+        "mails",
+        "dup_count",
+        "ALTER TABLE mails ADD COLUMN dup_count INTEGER NOT NULL DEFAULT 0",
+    ),
+    ("mails", "body_text", "ALTER TABLE mails ADD COLUMN body_text TEXT"),
+    ("mails", "raw_path", "ALTER TABLE mails ADD COLUMN raw_path TEXT"),
+    ("mails", "raw_size", "ALTER TABLE mails ADD COLUMN raw_size INTEGER"),
+    ("mails", "cc_addr", "ALTER TABLE mails ADD COLUMN cc_addr TEXT"),
+    ("mails", "reply_to", "ALTER TABLE mails ADD COLUMN reply_to TEXT"),
+    ("mails", "in_reply_to", "ALTER TABLE mails ADD COLUMN in_reply_to TEXT"),
+    (
+        "mails",
+        "references_header",
+        "ALTER TABLE mails ADD COLUMN references_header TEXT",
+    ),
+    (
+        "mails",
+        "legal_hold",
+        "ALTER TABLE mails ADD COLUMN legal_hold INTEGER NOT NULL DEFAULT 0",
+    ),
+    # servers columns
+    (
+        "servers",
+        "protocol",
+        "ALTER TABLE servers ADD COLUMN protocol TEXT NOT NULL DEFAULT 'imap'",
+    ),
+    ("servers", "last_sync", "ALTER TABLE servers ADD COLUMN last_sync TEXT"),
+    (
+        "servers",
+        "sync_enabled",
+        "ALTER TABLE servers ADD COLUMN sync_enabled INTEGER NOT NULL DEFAULT 1",
+    ),
+    # attachments columns
+    (
+        "attachments",
+        "content_hash",
+        "ALTER TABLE attachments ADD COLUMN content_hash TEXT",
+    ),
+]
+
+SYNC_STATE_TABLE = """
+CREATE TABLE IF NOT EXISTS sync_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    folder_name TEXT NOT NULL,
+    uid_validity INTEGER,
+    last_uid INTEGER NOT NULL DEFAULT 0,
+    last_sync TEXT,
+    UNIQUE(server_id, folder_name)
+)
+"""
+
+INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_mails_server_id ON mails(server_id)",
+    "CREATE INDEX IF NOT EXISTS idx_mails_message_id ON mails(message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_mails_date ON mails(date)",
+    "CREATE INDEX IF NOT EXISTS idx_mails_content_hash ON mails(content_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_tags_mail_id ON tags(mail_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag)",
+]
+
+
 async def init_db(db: aiosqlite.Connection):
+    await db.execute("PRAGMA journal_mode=WAL")
+    await db.execute("PRAGMA foreign_keys=ON")
     for statement in SCHEMA.split(";"):
         stmt = statement.strip()
         if stmt:
             await db.execute(stmt)
+    # Additive migrations
+    for _table, _col, sql in MIGRATIONS:
+        try:
+            await db.execute(sql)
+        except Exception:
+            pass  # column already exists
+    await db.execute(SYNC_STATE_TABLE)
+    for idx_sql in INDEXES:
+        await db.execute(idx_sql)
     await db.commit()
 
 

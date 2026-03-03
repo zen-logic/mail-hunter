@@ -7,12 +7,193 @@
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-    <header>
-        <h1>Mail Hunter</h1>
-    </header>
-    <main id="app">
-        <p>Welcome to Mail Hunter.</p>
-    </main>
+    <div id="app">
+        <!-- Toolbar -->
+        <div id="toolbar">
+            <h1>Mail Hunter</h1>
+            <div class="toolbar-actions">
+                <button class="btn btn-sm" id="btn-import" title="Import EML/MBOX">Import</button>
+            </div>
+            <div class="toolbar-spacer"></div>
+            <div class="toolbar-icons">
+                <button class="btn btn-icon" id="btn-search" title="Search">
+                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="8.5" cy="8.5" r="5.5"/>
+                        <line x1="13" y1="13" x2="18" y2="18"/>
+                    </svg>
+                </button>
+                <button class="btn btn-icon" id="btn-settings" title="Settings">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path fill-rule="evenodd" d="M11.078 2.25c-.917 0-1.699.663-1.85 1.567L9.05 4.889c-.02.12-.115.26-.297.348a7.493 7.493 0 0 0-.986.57c-.166.115-.334.126-.45.083L6.3 5.508a1.875 1.875 0 0 0-2.282.819l-.922 1.597a1.875 1.875 0 0 0 .432 2.385l.84.692c.095.078.17.229.154.43a7.598 7.598 0 0 0 0 1.139c.015.2-.059.352-.153.43l-.841.692a1.875 1.875 0 0 0-.432 2.385l.922 1.597a1.875 1.875 0 0 0 2.282.818l1.019-.382c.115-.043.283-.031.45.082.312.214.641.405.985.57.182.088.277.228.297.35l.178 1.071c.151.904.933 1.567 1.85 1.567h1.844c.916 0 1.699-.663 1.85-1.567l.178-1.072c.02-.12.114-.26.297-.349.344-.165.673-.356.985-.57.167-.114.335-.125.45-.082l1.02.382a1.875 1.875 0 0 0 2.28-.819l.923-1.597a1.875 1.875 0 0 0-.432-2.385l-.84-.692c-.095-.078-.17-.229-.154-.43a7.614 7.614 0 0 0 0-1.139c-.016-.2.059-.352.153-.43l.84-.692c.708-.582.891-1.59.433-2.385l-.922-1.597a1.875 1.875 0 0 0-2.282-.818l-1.02.382c-.114.043-.282.031-.449-.083a7.49 7.49 0 0 0-.985-.57c-.183-.087-.277-.227-.297-.348l-.179-1.072a1.875 1.875 0 0 0-1.85-1.567h-1.843zM12 15.75a3.75 3.75 0 1 0 0-7.5 3.75 3.75 0 0 0 0 7.5z" clip-rule="evenodd"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Search panel (toggled) -->
+        <div id="search-panel" class="search-panel hidden">
+            <div class="search-row">
+                <label class="search-label">From</label>
+                <input type="text" class="search-input" id="search-from" placeholder="Sender name or address...">
+                <label class="search-label">To</label>
+                <input type="text" class="search-input" id="search-to" placeholder="Recipient...">
+            </div>
+            <div class="search-row">
+                <label class="search-label">Subject</label>
+                <input type="text" class="search-input" id="search-subject" placeholder="Subject...">
+                <label class="search-label">Body</label>
+                <input type="text" class="search-input" id="search-body" placeholder="Message text...">
+            </div>
+            <div class="search-row">
+                <label class="search-label">Date</label>
+                <input type="date" class="search-input search-input-sm" id="search-date-from">
+                <span class="search-separator">&ndash;</span>
+                <input type="date" class="search-input search-input-sm" id="search-date-to">
+                <div class="search-actions">
+                    <button class="btn btn-primary" id="search-go">Search</button>
+                    <button class="btn" id="search-clear">Clear</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Panels -->
+        <div id="panels">
+            <!-- Left: mail servers -->
+            <div id="server-panel">
+                <div class="panel-header">
+                    <span class="panel-title">Servers</span>
+                    <input type="text" class="panel-filter" id="server-filter" placeholder="Filter...">
+                </div>
+                <div class="panel-content" id="server-content">
+                    <div class="empty-state">
+                        <span>No servers configured</span>
+                        <span class="text-muted">Add one in Settings</span>
+                    </div>
+                </div>
+                <div id="activity-log-toggle" class="activity-log-toggle">Activity &#x25BE;</div>
+                <div id="activity-log">
+                    <div id="activity-log-list"></div>
+                </div>
+            </div>
+
+            <div class="panel-resize-handle" id="resize-left"></div>
+
+            <!-- Middle: mail items -->
+            <div id="mail-panel">
+                <div class="panel-header">
+                    <span class="panel-title" id="mail-panel-title">Messages</span>
+                    <span class="text-muted" id="mail-count"></span>
+                    <input type="text" class="panel-filter" id="mail-filter" placeholder="Filter...">
+                </div>
+                <div class="panel-content" id="mail-content">
+                    <div class="empty-state">
+                        <span>Select a server or folder</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-resize-handle" id="resize-right"></div>
+
+            <!-- Right: details + tags -->
+            <div id="detail-panel">
+                <div class="panel-header">
+                    <span class="panel-title">Details</span>
+                </div>
+                <div class="panel-content" id="detail-content">
+                    <div class="empty-state">
+                        <span>Select a message</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status bar -->
+        <div id="status-bar">
+            <div id="status-stats"></div>
+            <div id="status-activity"></div>
+            <div id="status-connection">
+                <span class="status-dot"></span>
+                <span>Ready</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings modal -->
+    <div class="modal-overlay hidden" id="settings-modal">
+        <div class="modal-dialog">
+            <div class="settings-header">
+                <span class="modal-title">Settings</span>
+                <button class="btn-close" id="settings-close">&times;</button>
+            </div>
+            <div id="settings-content"></div>
+        </div>
+    </div>
+
+    <!-- Import modal -->
+    <div class="modal-overlay hidden" id="import-modal">
+        <div class="modal-dialog">
+            <div class="settings-header">
+                <span class="modal-title">Import Mail</span>
+                <button class="btn-close" id="import-close">&times;</button>
+            </div>
+            <div id="import-content">
+                <div class="settings-section">
+                    <div class="settings-row">
+                        <label class="modal-label">Format</label>
+                        <div class="settings-inline">
+                            <label><input type="radio" name="import-format" value="eml" checked> EML files</label>
+                            <label><input type="radio" name="import-format" value="mbox"> MBOX file</label>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="import-dropzone" id="import-dropzone">
+                            <span class="text-muted">Drag &amp; drop files here, or click to browse</span>
+                            <input type="file" id="import-file-input" multiple hidden>
+                        </div>
+                        <div id="import-file-list" class="import-file-list"></div>
+                    </div>
+                    <div class="settings-row">
+                        <button class="btn btn-primary" id="import-go" disabled>Import</button>
+                        <span class="text-muted" id="import-status"></span>
+                    </div>
+                    <div id="import-resolve" class="hidden"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm dialog -->
+    <div class="modal-overlay hidden" id="confirm-modal">
+        <div class="modal-dialog modal-dialog-sm">
+            <div class="settings-header">
+                <span class="modal-title" id="confirm-title">Confirm</span>
+            </div>
+            <div class="confirm-body">
+                <p id="confirm-message"></p>
+                <div class="confirm-actions">
+                    <button class="btn btn-sm" id="confirm-cancel">Cancel</button>
+                    <button class="btn btn-sm btn-danger" id="confirm-ok">Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Message preview dialog -->
+    <div class="modal-overlay hidden" id="preview-modal">
+        <div class="modal-dialog modal-dialog-lg">
+            <div class="settings-header">
+                <span class="modal-title" id="preview-title"></span>
+                <button class="btn-close" id="preview-close">&times;</button>
+            </div>
+            <div class="preview-body" id="preview-body"></div>
+        </div>
+    </div>
+
+    <!-- Drag-drop overlay -->
+    <div id="drop-overlay" class="drop-overlay hidden">
+        <div class="drop-overlay-label">Drop to import</div>
+    </div>
+
     <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

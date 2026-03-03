@@ -6,6 +6,7 @@ __pycache__/
 *.db-shm
 *.db-wal
 *.sqlite
+archive/
 .DS_Store
 .claude/
 CLAUDE.md

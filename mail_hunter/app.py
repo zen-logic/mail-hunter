@@ -1,10 +1,26 @@
 from starlette.applications import Starlette
-from starlette.routing import Route, Mount
+from starlette.routing import Route, Mount, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.responses import HTMLResponse
 from pathlib import Path
 
 from mail_hunter.db import get_db, close_db
+from mail_hunter.ws import ws_endpoint
+from mail_hunter.routes.api import (
+    list_servers,
+    create_server,
+    update_server,
+    delete_server,
+    search_mails,
+    list_mails,
+    get_mail,
+    delete_mail,
+    get_mail_raw,
+    get_mail_attachment,
+    add_tag,
+    remove_tag,
+)
+from mail_hunter.routes.import_mail import import_upload, import_resolve
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -24,6 +40,25 @@ async def on_shutdown():
 
 routes = [
     Route("/", homepage),
+    WebSocketRoute("/ws", ws_endpoint),
+    Route("/api/servers", list_servers, methods=["GET"]),
+    Route("/api/servers", create_server, methods=["POST"]),
+    Route("/api/servers/{server_id:int}", update_server, methods=["PUT"]),
+    Route("/api/servers/{server_id:int}", delete_server, methods=["DELETE"]),
+    Route("/api/mails/search", search_mails, methods=["GET"]),
+    Route("/api/servers/{server_id:int}/mails", list_mails, methods=["GET"]),
+    Route("/api/mails/{mail_id:int}", get_mail, methods=["GET"]),
+    Route("/api/mails/{mail_id:int}", delete_mail, methods=["DELETE"]),
+    Route("/api/mails/{mail_id:int}/raw", get_mail_raw, methods=["GET"]),
+    Route(
+        "/api/mails/{mail_id:int}/attachments/{index:int}",
+        get_mail_attachment,
+        methods=["GET"],
+    ),
+    Route("/api/mails/{mail_id:int}/tags", add_tag, methods=["POST"]),
+    Route("/api/mails/{mail_id:int}/tags/{tag:str}", remove_tag, methods=["DELETE"]),
+    Route("/api/import", import_upload, methods=["POST"]),
+    Route("/api/import/resolve", import_resolve, methods=["POST"]),
     Mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static"),
 ]
 
