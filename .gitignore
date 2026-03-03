@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.ruff_cache/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+.DS_Store
+.claude/
+CLAUDE.md
+DEVLOG.md
+PROJECT.md
+RESTORE_SANITY.md
+MEMORY.md

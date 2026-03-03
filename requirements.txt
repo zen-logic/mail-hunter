@@ -1,0 +1,6 @@
+starlette
+uvicorn[standard]
+aiosqlite
+python-multipart
+httpx
+ruff
