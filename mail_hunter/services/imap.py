@@ -176,6 +176,7 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
 
         for folder_name in folders:
             if server_id in _cancel_requested:
+                _active_syncs.discard(server_id)
                 await broadcast(
                     {
                         "type": "sync_cancelled",
