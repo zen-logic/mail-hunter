@@ -39,18 +39,35 @@ def _list_folders(conn) -> list[str]:
     folders = []
     for item in data:
         if isinstance(item, bytes):
-            # Parse IMAP LIST response: (\\flags) "delimiter" "name"
+            # Parse IMAP LIST response: (\flags) "delimiter" name
+            # Name may be quoted ("INBOX") or unquoted (INBOX)
             decoded = item.decode("utf-8", errors="replace")
-            # Extract folder name — last quoted string or last token
-            parts = decoded.rsplit('"', 2)
-            if len(parts) >= 2:
-                name = parts[-2]
-            else:
-                name = decoded.split()[-1]
             # Skip non-selectable folders
             if "\\Noselect" in decoded:
                 continue
-            folders.append(name)
+            # Find the delimiter (quoted char after the flags parenthesis)
+            # Format: (\flags) "." "FolderName"  or  (\flags) "." FolderName
+            paren_end = decoded.find(")")
+            if paren_end < 0:
+                continue
+            rest = decoded[paren_end + 1 :].strip()
+            # rest is now: "." "FolderName"  or  "." FolderName
+            # Skip the quoted delimiter
+            if rest.startswith('"'):
+                delim_end = rest.find('"', 1)
+                if delim_end < 0:
+                    continue
+                rest = rest[delim_end + 1 :].strip()
+            else:
+                # NIL delimiter or unexpected format
+                rest = rest.split(None, 1)[-1] if " " in rest else rest
+            # rest is now: "FolderName" or FolderName
+            if rest.startswith('"') and rest.endswith('"'):
+                name = rest[1:-1]
+            else:
+                name = rest
+            if name:
+                folders.append(name)
     return folders
 
 
