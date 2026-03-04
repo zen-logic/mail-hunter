@@ -11,6 +11,7 @@ from mail_hunter.services.store import extract_attachment_from_path, read_raw
 
 SORT_COLUMNS = {
     "from": "COALESCE(NULLIF(from_name,''),from_addr)",
+    "to": "to_addr",
     "subject": "subject",
     "date": "date",
     "size": "size",
@@ -18,6 +19,7 @@ SORT_COLUMNS = {
 # For queries using table alias "m."
 SORT_COLUMNS_M = {
     "from": "COALESCE(NULLIF(m.from_name,''),m.from_addr)",
+    "to": "m.to_addr",
     "subject": "m.subject",
     "date": "m.date",
     "size": "m.size",
@@ -216,7 +218,7 @@ async def search_mails(request: Request):
     total = count_row[0]["cnt"] if count_row else 0
 
     rows = await db.execute_fetchall(
-        "SELECT id, subject, from_name, from_addr, date, size, unread, attachment_count "
+        "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count "
         f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
         f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
         params,
@@ -243,7 +245,7 @@ async def list_mails(request: Request):
         )
         total = count_row[0]["cnt"] if count_row else 0
         rows = await db.execute_fetchall(
-            "SELECT m.id, m.subject, m.from_name, m.from_addr, m.date, m.size, "
+            "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, m.size, "
             "m.unread, m.attachment_count "
             "FROM mails m JOIN folders f ON m.folder_id = f.id "
             f"WHERE {where} ORDER BY {sort_col_m} {sort_dir} "
@@ -258,7 +260,7 @@ async def list_mails(request: Request):
         )
         total = count_row[0]["cnt"] if count_row else 0
         rows = await db.execute_fetchall(
-            "SELECT id, subject, from_name, from_addr, date, size, unread, attachment_count "
+            "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count "
             f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
             f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
             params,

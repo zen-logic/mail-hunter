@@ -550,7 +550,11 @@ body {
 }
 
 .mail-table .col-from {
-    width: 150px;
+    width: 120px;
+}
+
+.mail-table .col-to {
+    width: 120px;
 }
 
 .mail-table .col-subject {

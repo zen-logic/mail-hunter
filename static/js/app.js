@@ -542,6 +542,7 @@ function applyFilterAndRender() {
     const filtered = currentMails.filter(m =>
         (m.from_name || '').toLowerCase().includes(q) ||
         (m.from_addr || '').toLowerCase().includes(q) ||
+        (m.to_addr || '').toLowerCase().includes(q) ||
         (m.subject || '').toLowerCase().includes(q)
     );
     renderMails(filtered);
@@ -1390,6 +1391,7 @@ function renderMails(mails) {
 
     let html = `<table class="mail-table"><thead><tr>
         ${sortHeader('From', 'from', 'col-from')}
+        ${sortHeader('To', 'to', 'col-to')}
         ${sortHeader('Subject', 'subject', 'col-subject')}
         ${sortHeader('Date', 'date', 'col-date')}
         ${sortHeader('Size', 'size', 'col-size')}
@@ -1401,6 +1403,7 @@ function renderMails(mails) {
         const unread = m.unread ? ' unread' : '';
         html += `<tr class="${sel}${unread}" data-id="${m.id}">
             <td class="col-from">${esc(m.from_name || m.from_addr || '')}</td>
+            <td class="col-to">${esc(m.to_addr || '')}</td>
             <td class="col-subject">${esc(m.subject || '(no subject)')}</td>
             <td class="col-date">${formatDate(m.date)}</td>
             <td class="col-size">${formatSize(m.size)}</td>
