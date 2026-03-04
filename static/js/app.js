@@ -1667,7 +1667,7 @@ async function openAbout() {
     aboutContent.innerHTML = `
         <div class="about-info">
             <div class="about-version">Mail Hunter v${esc(version)}</div>
-            <p class="about-desc">Email archiving and search tool for managing IMAP mailboxes and local mail archives.</p>
+            <p class="about-desc">Email archiving and search tool for managing remote mailboxes and local mail archives.</p>
             <p class="about-links">
                 <a href="https://github.com/zen-logic/mail-hunter" target="_blank" rel="noopener">GitHub</a>
             </p>
