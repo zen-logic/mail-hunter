@@ -1,9 +1,11 @@
+import asyncio
 import logging
 import mailbox
 from pathlib import Path
 
 import aiosqlite
 
+from mail_hunter.db import check_write_lock_requested
 from mail_hunter.services.parser import parse_message
 from mail_hunter.services.store import store_message
 from mail_hunter.services.dedup import recalculate_dup_counts
@@ -249,8 +251,13 @@ async def run_import(
             if parsed["message_id"]:
                 message_ids.append(parsed["message_id"])
 
-            if imported % BATCH_SIZE == 0:
+            if check_write_lock_requested():
                 await db.commit()
+                await asyncio.sleep(0.2)
+            elif imported % BATCH_SIZE == 0:
+                await db.commit()
+
+            if imported % BATCH_SIZE == 0:
                 await broadcast(
                     {
                         "type": "import_progress",

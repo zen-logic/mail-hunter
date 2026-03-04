@@ -4,7 +4,7 @@ import logging
 import ssl
 from datetime import datetime, timezone
 
-from mail_hunter.db import open_connection
+from mail_hunter.db import open_connection, check_write_lock_requested
 from mail_hunter.services.parser import parse_message
 from mail_hunter.services.store import store_message
 from mail_hunter.services.importer import _ensure_folder, _is_duplicate, _insert_mail
@@ -305,7 +305,10 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
                     if uid > max_uid:
                         max_uid = uid
 
-                    if (imported + skipped) % BATCH_SIZE == 0:
+                    if check_write_lock_requested():
+                        await db.commit()
+                        await asyncio.sleep(0.2)
+                    elif (imported + skipped) % BATCH_SIZE == 0:
                         await db.commit()
 
                     msg_out = {
@@ -326,6 +329,8 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
                     errors += 1
 
             await db.commit()
+            if check_write_lock_requested():
+                await asyncio.sleep(0.2)
 
             # Update sync state
             await db.execute(

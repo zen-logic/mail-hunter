@@ -165,6 +165,46 @@ async def close_db():
         _db = None
 
 
+# ---------------------------------------------------------------------------
+# Cooperative write-lock yielding (same pattern as File Hunter)
+# ---------------------------------------------------------------------------
+# Background tasks (sync, import) hold the write lock for extended periods.
+# UI operations signal that they need the lock; background tasks check this
+# flag after each commit and yield briefly so the UI write can proceed.
+# ---------------------------------------------------------------------------
+
+_write_lock_requested = False
+
+
+def request_write_lock():
+    """Signal background tasks to yield the DB write lock."""
+    global _write_lock_requested
+    _write_lock_requested = True
+
+
+def check_write_lock_requested() -> bool:
+    """Check and clear the write lock request flag. Called by background tasks."""
+    global _write_lock_requested
+    if _write_lock_requested:
+        _write_lock_requested = False
+        return True
+    return False
+
+
+async def execute_write(func, *args, **kwargs):
+    """Run a write function on its own connection.
+
+    Signals background tasks to yield the write lock, then lets SQLite's
+    busy_timeout handle contention.
+    """
+    request_write_lock()
+    conn = await open_connection()
+    try:
+        return await func(conn, *args, **kwargs)
+    finally:
+        await conn.close()
+
+
 async def open_connection() -> aiosqlite.Connection:
     """Open a standalone database connection (caller must close it)."""
     config = load_config()

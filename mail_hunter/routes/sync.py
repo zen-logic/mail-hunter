@@ -4,7 +4,7 @@ from pathlib import Path
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from mail_hunter.db import get_db
+from mail_hunter.db import get_db, request_write_lock
 from mail_hunter.services.imap import (
     test_connection,
     sync_server,
@@ -43,6 +43,7 @@ async def sync_endpoint(request: Request):
     purge = request.query_params.get("purge") == "1"
 
     if purge:
+        request_write_lock()
         # Delete all mails and archive files for this server
         raw_rows = await db.execute_fetchall(
             "SELECT raw_path FROM mails WHERE server_id = ? AND raw_path IS NOT NULL",

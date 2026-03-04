@@ -2,7 +2,7 @@ from pathlib import Path
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from mail_hunter.db import get_db
+from mail_hunter.db import get_db, request_write_lock
 from mail_hunter.services.store import extract_attachment_from_path
 
 SORT_COLUMNS = {
@@ -64,6 +64,7 @@ async def create_server(request: Request):
     if not host or not username:
         return JSONResponse({"error": "host and username required"}, status_code=400)
 
+    request_write_lock()
     db = await get_db()
     cursor = await db.execute(
         "INSERT INTO servers (name, host, port, username, password) VALUES (?, ?, ?, ?, ?)",
@@ -85,6 +86,7 @@ async def update_server(request: Request):
     if not host or not username:
         return JSONResponse({"error": "host and username required"}, status_code=400)
 
+    request_write_lock()
     db = await get_db()
     if password:
         await db.execute(
@@ -102,6 +104,7 @@ async def update_server(request: Request):
 
 async def delete_server(request: Request):
     server_id = request.path_params["server_id"]
+    request_write_lock()
     db = await get_db()
 
     # Collect raw file paths before cascade delete removes the rows
@@ -266,6 +269,7 @@ async def add_tag(request: Request):
     if not tag:
         return JSONResponse({"error": "tag required"}, status_code=400)
 
+    request_write_lock()
     db = await get_db()
     try:
         await db.execute(
@@ -280,6 +284,7 @@ async def add_tag(request: Request):
 async def remove_tag(request: Request):
     mail_id = request.path_params["mail_id"]
     tag = request.path_params["tag"]
+    request_write_lock()
     db = await get_db()
     await db.execute("DELETE FROM tags WHERE mail_id = ? AND tag = ?", (mail_id, tag))
     await db.commit()
@@ -289,6 +294,7 @@ async def remove_tag(request: Request):
 async def delete_mail(request: Request):
     """Delete a single mail (blocked by legal_hold)."""
     mail_id = request.path_params["mail_id"]
+    request_write_lock()
     db = await get_db()
     row = await db.execute_fetchall(
         "SELECT legal_hold, raw_path FROM mails WHERE id = ?", (mail_id,)
