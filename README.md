@@ -25,10 +25,10 @@ Email archiving and search tool for managing remote mailboxes and local mail arc
 
 ```bash
 pip install -r requirements.txt
-uvicorn mail_hunter.app:app --reload
+python -m mail_hunter
 ```
 
-Open http://localhost:8000 in your browser.
+Open http://localhost:8700 in your browser.
 
 ## Licence
 
