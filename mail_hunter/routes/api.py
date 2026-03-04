@@ -7,7 +7,7 @@ from starlette.responses import JSONResponse, Response
 from mail_hunter import __version__
 from mail_hunter.db import get_db, request_write_lock
 from mail_hunter.services.parser import _extract_body, _extract_body_html
-from mail_hunter.services.store import extract_attachment_from_path
+from mail_hunter.services.store import extract_attachment_from_path, read_raw
 
 SORT_COLUMNS = {
     "from": "COALESCE(NULLIF(from_name,''),from_addr)",
@@ -347,7 +347,7 @@ async def get_mail_raw(request: Request):
         return JSONResponse({"error": "no raw message stored"}, status_code=404)
 
     try:
-        data = Path(raw_path).read_bytes()
+        data = read_raw(raw_path)
     except FileNotFoundError:
         return JSONResponse({"error": "raw message file missing"}, status_code=404)
 
@@ -406,7 +406,7 @@ async def get_mail_preview(request: Request):
         return JSONResponse({"error": "no raw message stored"}, status_code=404)
 
     try:
-        raw_bytes = Path(raw_path).read_bytes()
+        raw_bytes = read_raw(raw_path)
     except FileNotFoundError:
         return JSONResponse({"error": "raw message file missing"}, status_code=404)
 

@@ -3,4 +3,5 @@ uvicorn[standard]
 aiosqlite
 python-multipart
 httpx
+zstandard
 ruff
