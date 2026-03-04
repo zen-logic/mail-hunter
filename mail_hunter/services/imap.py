@@ -15,6 +15,19 @@ logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 100
 
+
+async def _save_sync_state(db, server_id, folder_name, uid_validity, last_uid):
+    """Persist sync checkpoint so progress survives interruptions."""
+    await db.execute(
+        "INSERT INTO sync_state (server_id, folder_name, uid_validity, last_uid, last_sync) "
+        "VALUES (?, ?, ?, ?, datetime('now')) "
+        "ON CONFLICT(server_id, folder_name) DO UPDATE SET "
+        "uid_validity=excluded.uid_validity, last_uid=excluded.last_uid, last_sync=datetime('now')",
+        (server_id, folder_name, uid_validity, last_uid),
+    )
+    await db.commit()
+
+
 # Active sync tasks: server_id -> True (used for cancellation)
 _cancel_requested: set[int] = set()
 _active_syncs: set[int] = set()
@@ -255,15 +268,7 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
                 )
 
             if not new_uids:
-                # Update sync state even if no new messages
-                await db.execute(
-                    "INSERT INTO sync_state (server_id, folder_name, uid_validity, last_uid, last_sync) "
-                    "VALUES (?, ?, ?, ?, datetime('now')) "
-                    "ON CONFLICT(server_id, folder_name) DO UPDATE SET "
-                    "uid_validity=excluded.uid_validity, last_sync=datetime('now')",
-                    (server_id, folder_name, uid_validity, saved_last_uid),
-                )
-                await db.commit()
+                await _save_sync_state(db, server_id, folder_name, uid_validity, saved_last_uid)
                 continue
 
             folder_id = await _ensure_folder(db, server_id, folder_name)
@@ -324,9 +329,11 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
 
                     if check_write_lock_requested():
                         await db.commit()
+                        await _save_sync_state(db, server_id, folder_name, uid_validity, max_uid)
                         await asyncio.sleep(0.2)
                     elif (imported + skipped) % BATCH_SIZE == 0:
                         await db.commit()
+                        await _save_sync_state(db, server_id, folder_name, uid_validity, max_uid)
 
                     msg_out = {
                         "type": "sync_progress",
@@ -346,18 +353,9 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
                     errors += 1
 
             await db.commit()
+            await _save_sync_state(db, server_id, folder_name, uid_validity, max_uid)
             if check_write_lock_requested():
                 await asyncio.sleep(0.2)
-
-            # Update sync state
-            await db.execute(
-                "INSERT INTO sync_state (server_id, folder_name, uid_validity, last_uid, last_sync) "
-                "VALUES (?, ?, ?, ?, datetime('now')) "
-                "ON CONFLICT(server_id, folder_name) DO UPDATE SET "
-                "uid_validity=excluded.uid_validity, last_uid=excluded.last_uid, last_sync=datetime('now')",
-                (server_id, folder_name, uid_validity, max_uid),
-            )
-            await db.commit()
 
         # Recalculate dup counts
         if message_ids:
