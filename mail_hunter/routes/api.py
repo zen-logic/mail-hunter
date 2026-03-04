@@ -367,6 +367,6 @@ async def get_mail_attachment(request: Request):
 
     return Response(
         data,
-        media_type=content_type,
+        media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

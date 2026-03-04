@@ -1345,7 +1345,7 @@ function renderDetail(mail) {
             <h3>Attachments</h3>
             <div class="attachment-list">
                 ${mail.attachments.map((a, i) => `<div class="attachment-item">
-                    <a href="/api/mails/${mail.id}/attachments/${i}" class="attachment-link">${esc(a.filename)}</a>
+                    <button class="btn btn-sm" data-att-idx="${i}">${esc(a.filename)}</button>
                     <span class="attachment-size">${formatSize(a.size)}</span>
                 </div>`).join('')}
             </div>
@@ -1375,6 +1375,13 @@ function renderDetail(mail) {
     // Download EML
     document.getElementById('btn-download-eml')?.addEventListener('click', () => {
         window.location.href = `/api/mails/${mail.id}/raw`;
+    });
+
+    // Attachment downloads
+    container.querySelectorAll('[data-att-idx]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            window.location.href = `/api/mails/${mail.id}/attachments/${btn.dataset.attIdx}`;
+        });
     });
 
     // Delete mail
