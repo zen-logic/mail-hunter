@@ -935,6 +935,28 @@ async function loadServers() {
     }
 }
 
+function getCollapsedServers() {
+    try {
+        return JSON.parse(localStorage.getItem('mh-collapsed-servers') || '[]');
+    } catch (e) { return []; }
+}
+
+function setCollapsedServers(ids) {
+    localStorage.setItem('mh-collapsed-servers', JSON.stringify(ids));
+}
+
+function toggleServerCollapse(serverId) {
+    const collapsed = getCollapsedServers();
+    const idx = collapsed.indexOf(serverId);
+    if (idx === -1) {
+        collapsed.push(serverId);
+    } else {
+        collapsed.splice(idx, 1);
+    }
+    setCollapsedServers(collapsed);
+    renderServers(allServers);
+}
+
 function renderServers(servers) {
     const container = document.getElementById('server-content');
     if (!servers.length) {
@@ -959,15 +981,22 @@ function renderServers(servers) {
         return;
     }
 
+    const collapsed = getCollapsedServers();
     let html = '';
     for (const s of filtered) {
         const sel = s.id === selectedServerId ? ' selected' : '';
         const syncBadge = s.id === syncingServerId ? '<span class="sync-badge">syncing</span>' : '';
+        const isCollapsed = collapsed.includes(s.id);
+        const hasFolders = s.folders && s.folders.length > 0;
+        const chevron = hasFolders
+            ? `<span class="server-toggle" data-toggle="${s.id}">${isCollapsed ? '&#x25B8;' : '&#x25BE;'}</span>`
+            : '<span class="server-toggle-spacer"></span>';
         html += `<div class="server-item${sel}" data-id="${s.id}">
+            ${chevron}
             <span class="server-label">${esc(s.name)}</span>
             ${syncBadge}
         </div>`;
-        if (s.folders) {
+        if (s.folders && !isCollapsed) {
             for (const f of s.folders) {
                 const fsel = s.id === selectedServerId && f.name === selectedFolder ? ' selected' : '';
                 html += `<div class="folder-item${fsel}" data-server="${s.id}" data-folder="${esc(f.name)}">
@@ -979,6 +1008,12 @@ function renderServers(servers) {
     }
     container.innerHTML = html;
 
+    container.querySelectorAll('.server-toggle').forEach(el => {
+        el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleServerCollapse(parseInt(el.dataset.toggle));
+        });
+    });
     container.querySelectorAll('.server-item').forEach(el => {
         el.addEventListener('click', () => selectServer(parseInt(el.dataset.id)));
     });

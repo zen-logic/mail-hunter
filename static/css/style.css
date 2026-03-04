@@ -380,6 +380,24 @@ body {
     opacity: 0.45;
 }
 
+.server-toggle {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    width: 0.75rem;
+    flex-shrink: 0;
+    cursor: pointer;
+    text-align: center;
+}
+
+.server-toggle:hover {
+    color: var(--color-text);
+}
+
+.server-toggle-spacer {
+    width: 0.75rem;
+    flex-shrink: 0;
+}
+
 .server-label {
     flex: 1;
     min-width: 0;
