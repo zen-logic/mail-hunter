@@ -24,16 +24,22 @@ def parse_message(raw_bytes: bytes) -> dict:
     # Parse from name + addr
     from_name, from_addr = email.utils.parseaddr(from_header)
 
-    # Parse date
+    # Parse date — fall back to most recent Received header if Date is broken
     date_iso = None
-    if date_header:
+    date_candidates = [date_header] if date_header else []
+    for received in msg.get_all("Received", []):
+        # Received headers have a semicolon before the date portion
+        if ";" in received:
+            date_candidates.append(received.split(";", 1)[1].strip())
+    for candidate in date_candidates:
         try:
-            dt = email.utils.parsedate_to_datetime(date_header)
+            dt = email.utils.parsedate_to_datetime(candidate)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             date_iso = dt.isoformat()
+            break
         except (ValueError, TypeError):
-            pass
+            continue
 
     # Extract body text
     body_text = _extract_body(msg)
