@@ -147,8 +147,9 @@ async def search_mails(request: Request):
     body_q = request.query_params.get("body", "").strip()
     date_from = request.query_params.get("date_from", "").strip()
     date_to = request.query_params.get("date_to", "").strip()
+    tag_q = request.query_params.get("tag", "").strip()
 
-    if not any([from_q, to_q, subject_q, body_q, date_from, date_to]):
+    if not any([from_q, to_q, subject_q, body_q, date_from, date_to, tag_q]):
         return JSONResponse({"items": [], "total": 0, "page": 0, "pageSize": PAGE_SIZE})
 
     conditions = []
@@ -182,6 +183,13 @@ async def search_mails(request: Request):
     if date_to:
         conditions.append("date <= ?")
         params.append(date_to + "T23:59:59")
+
+    if tag_q:
+        for tag in [t.strip() for t in tag_q.split(",") if t.strip()]:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM tags t WHERE t.mail_id = mails.id AND t.tag = ?)"
+            )
+            params.append(tag)
 
     where = " AND ".join(conditions)
     sort_col, _sort_col_m, sort_dir, page = _sort_params(request)

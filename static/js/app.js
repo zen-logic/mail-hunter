@@ -392,7 +392,7 @@ serverFilter.addEventListener('keydown', (e) => {
 
 const searchPanel = document.getElementById('search-panel');
 const searchToggleBtn = document.getElementById('btn-search');
-const searchFields = ['search-from', 'search-to', 'search-subject', 'search-body', 'search-date-from', 'search-date-to'];
+const searchFields = ['search-from', 'search-to', 'search-subject', 'search-body', 'search-date-from', 'search-date-to', 'search-tag'];
 
 searchToggleBtn.addEventListener('click', () => {
     const visible = !searchPanel.classList.contains('hidden');
@@ -413,15 +413,17 @@ function getSearchParams() {
     if (to) params.to = to;
     if (subject) params.subject = subject;
     if (body) params.body = body;
+    const tag = document.getElementById('search-tag').value.trim();
     if (dateFrom) params.date_from = dateFrom;
     if (dateTo) params.date_to = dateTo;
+    if (tag) params.tag = tag;
     if (selectedServerId) params.server_id = selectedServerId;
     return params;
 }
 
 function hasSearchParams() {
     const p = getSearchParams();
-    return p.from || p.to || p.subject || p.body || p.date_from || p.date_to;
+    return p.from || p.to || p.subject || p.body || p.date_from || p.date_to || p.tag;
 }
 
 document.getElementById('search-go').addEventListener('click', () => {
@@ -1151,7 +1153,11 @@ function renderServers(servers) {
     });
     container.querySelectorAll('.folder-item').forEach(el => {
         el.addEventListener('click', () => {
-            selectServer(parseInt(el.dataset.server));
+            const serverId = parseInt(el.dataset.server);
+            if (serverId !== selectedServerId) {
+                selectedServerId = serverId;
+                loadServers();
+            }
             selectFolder(el.dataset.folder);
         });
     });
@@ -1187,6 +1193,7 @@ function selectFolder(name) {
     selectedFolder = name;
     selectedMailId = null;
     currentPage = 0;
+    renderServers(allServers);
     loadMails();
     renderServerDetail();
 }
@@ -1474,13 +1481,25 @@ async function selectMail(id) {
         const mail = await resp.json();
 
         // Update server/folder selection to match this mail
-        if (mail.server_id && mail.server_id !== selectedServerId) {
+        if (mail.server_id) {
             selectedServerId = mail.server_id;
             selectedFolder = mail.folder_name || null;
+            // Ensure the server and parent folders are expanded
+            const collapsed = getCollapsedNodes();
+            collapsed.delete(`srv:${mail.server_id}`);
+            if (mail.folder_name) {
+                for (const sep of ['/', '.']) {
+                    let idx = 0;
+                    while ((idx = mail.folder_name.indexOf(sep, idx)) > 0) {
+                        collapsed.delete(`s${mail.server_id}:${mail.folder_name.slice(0, idx)}`);
+                        idx++;
+                    }
+                }
+            }
+            saveCollapsedNodes(collapsed);
             renderServers(allServers);
-        } else if (mail.folder_name && mail.folder_name !== selectedFolder) {
-            selectedFolder = mail.folder_name;
-            renderServers(allServers);
+            const sel = document.querySelector('.folder-item.selected') || document.querySelector('.server-item.selected');
+            if (sel) sel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         }
 
         renderDetail(mail);

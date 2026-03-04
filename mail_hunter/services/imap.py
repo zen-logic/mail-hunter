@@ -319,8 +319,13 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                     break
 
                 try:
+                    logger.info(
+                        "Sync %s/%s [%d/%d]: fetching UID %d",
+                        server["name"], folder_name, i + 1, len(new_uids), uid,
+                    )
                     raw_bytes = await asyncio.to_thread(_fetch_message, conn, uid)
                     if not raw_bytes:
+                        logger.info("  UID %d: empty response, skipping", uid)
                         continue
 
                     parsed = parse_message(raw_bytes)
@@ -328,6 +333,10 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                     mail_data = None
                     if await _is_duplicate(db, server_id, parsed):
                         skipped += 1
+                        logger.info(
+                            "  UID %d: duplicate (%d bytes), skipped",
+                            uid, len(raw_bytes),
+                        )
                     else:
                         sha, path = store_message(raw_bytes)
                         mail_id = await _insert_mail(
@@ -337,6 +346,10 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                         folder_count += 1
                         if parsed["message_id"]:
                             message_ids.append(parsed["message_id"])
+                        logger.info(
+                            "  UID %d: stored %d bytes, subject: %.60s",
+                            uid, len(raw_bytes), parsed["subject"] or "(none)",
+                        )
                         mail_data = {
                             "id": mail_id,
                             "subject": parsed["subject"],
@@ -404,6 +417,16 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                 }
             )
 
+    except asyncio.CancelledError:
+        logger.info("Sync for server %d interrupted by shutdown, will resume on restart", server_id)
+        if conn:
+            try:
+                await asyncio.to_thread(conn.logout)
+            except Exception:
+                pass
+        await db.close()
+        _active_syncs.discard(server_id)
+        return
     except Exception as e:
         logger.exception("Sync failed for server %d", server_id)
         await broadcast(
@@ -419,7 +442,7 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                 await asyncio.to_thread(conn.logout)
             except Exception:
                 pass
-        # Clear syncing flag
+        # Clear syncing flag — only reached on completion, cancel, or error (not shutdown)
         try:
             await db.execute(
                 "UPDATE servers SET syncing = 0 WHERE id = ?", (server_id,)

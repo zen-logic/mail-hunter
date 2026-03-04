@@ -6,11 +6,20 @@ logger = logging.getLogger(__name__)
 
 clients: set[WebSocket] = set()
 
+# Last sync message per server_id, so new clients get current state
+_sync_state: dict[int, dict] = {}
+
 
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     clients.add(websocket)
     logger.info("WebSocket client connected (%d total)", len(clients))
+    # Replay current sync state
+    for msg in _sync_state.values():
+        try:
+            await websocket.send_text(json.dumps(msg))
+        except Exception:
+            pass
     try:
         while True:
             await websocket.receive_text()
@@ -22,6 +31,15 @@ async def ws_endpoint(websocket: WebSocket):
 
 
 async def broadcast(msg: dict):
+    # Track sync state for replay on reconnect
+    msg_type = msg.get("type", "")
+    server_id = msg.get("server_id")
+    if server_id is not None and msg_type.startswith("sync_"):
+        if msg_type in ("sync_completed", "sync_error", "sync_cancelled"):
+            _sync_state.pop(server_id, None)
+        else:
+            _sync_state[server_id] = msg
+
     payload = json.dumps(msg)
     dead = []
     for ws in clients:
