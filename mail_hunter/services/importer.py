@@ -102,20 +102,29 @@ async def _insert_mail(
     return mail_id
 
 
+def _is_mbox_file(file_path: str) -> bool:
+    """Detect mbox format by checking if file starts with 'From '."""
+    try:
+        with open(file_path, "rb") as f:
+            return f.read(5) == b"From "
+    except OSError:
+        return False
+
+
 def scan_raw_messages(file_paths: list[str], is_mbox: bool = False) -> list[bytes]:
     """Read raw message bytes from EML files or an MBOX file. Synchronous."""
     raw_messages = []
-    if is_mbox and file_paths:
-        mbox = mailbox.mbox(file_paths[0])
-        for msg in mbox:
-            raw_messages.append(msg.as_bytes())
-        mbox.close()
-    else:
-        for fp in file_paths:
-            try:
+    for fp in file_paths:
+        try:
+            if is_mbox or _is_mbox_file(fp):
+                mbox = mailbox.mbox(fp)
+                for msg in mbox:
+                    raw_messages.append(msg.as_bytes())
+                mbox.close()
+            else:
                 raw_messages.append(Path(fp).read_bytes())
-            except OSError:
-                logger.exception("Failed to read %s", fp)
+        except OSError:
+            logger.exception("Failed to read %s", fp)
     return raw_messages
 
 
