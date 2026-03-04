@@ -935,26 +935,73 @@ async function loadServers() {
     }
 }
 
-function getCollapsedServers() {
+function getCollapsedNodes() {
     try {
-        return JSON.parse(localStorage.getItem('mh-collapsed-servers') || '[]');
-    } catch (e) { return []; }
+        return new Set(JSON.parse(localStorage.getItem('mh-collapsed-nodes') || '[]'));
+    } catch (e) { return new Set(); }
 }
 
-function setCollapsedServers(ids) {
-    localStorage.setItem('mh-collapsed-servers', JSON.stringify(ids));
+function saveCollapsedNodes(nodes) {
+    localStorage.setItem('mh-collapsed-nodes', JSON.stringify([...nodes]));
 }
 
-function toggleServerCollapse(serverId) {
-    const collapsed = getCollapsedServers();
-    const idx = collapsed.indexOf(serverId);
-    if (idx === -1) {
-        collapsed.push(serverId);
+function toggleCollapse(key) {
+    const nodes = getCollapsedNodes();
+    if (nodes.has(key)) {
+        nodes.delete(key);
     } else {
-        collapsed.splice(idx, 1);
+        nodes.add(key);
     }
-    setCollapsedServers(collapsed);
+    saveCollapsedNodes(nodes);
     renderServers(allServers);
+}
+
+function buildFolderTree(folders) {
+    // Build a tree from flat folder names like "Legacy/2015"
+    const root = [];
+    const map = {};
+    for (const f of folders) {
+        const parts = f.name.split('/');
+        let parent = root;
+        let path = '';
+        for (let i = 0; i < parts.length; i++) {
+            path = path ? path + '/' + parts[i] : parts[i];
+            if (!map[path]) {
+                const node = { name: parts[i], fullName: path, children: [], count: 0 };
+                map[path] = node;
+                parent.push(node);
+            }
+            if (i === parts.length - 1) {
+                map[path].count = f.count ?? 0;
+                map[path].isLeaf = true;
+            }
+            parent = map[path].children;
+        }
+    }
+    return root;
+}
+
+function renderFolderTree(nodes, serverId, collapsed, depth) {
+    let html = '';
+    for (const node of nodes) {
+        const fsel = serverId === selectedServerId && node.fullName === selectedFolder ? ' selected' : '';
+        const indent = 1.5 + depth * 0.75;
+        const key = `s${serverId}:${node.fullName}`;
+        const hasChildren = node.children.length > 0;
+        const isCollapsed = collapsed.has(key);
+        let chevron = '';
+        if (hasChildren) {
+            chevron = `<span class="folder-toggle" data-toggle-key="${esc(key)}">${isCollapsed ? '&#x25B8;' : '&#x25BE;'}</span>`;
+        }
+        html += `<div class="folder-item${fsel}" data-server="${serverId}" data-folder="${esc(node.fullName)}" style="padding-left:${indent}rem">
+            ${chevron}<span>${esc(node.name)}</span>
+            <span class="folder-count">${node.count || ''}</span>
+        </div>`;
+        if (hasChildren && !isCollapsed) {
+            html += renderFolderTree(node.children, serverId, collapsed, depth + 1);
+        }
+    }
+    return html;
 }
 
 function renderServers(servers) {
@@ -981,37 +1028,33 @@ function renderServers(servers) {
         return;
     }
 
-    const collapsed = getCollapsedServers();
+    const collapsed = getCollapsedNodes();
     let html = '';
     for (const s of filtered) {
         const sel = s.id === selectedServerId ? ' selected' : '';
         const syncBadge = s.id === syncingServerId ? '<span class="sync-badge">syncing</span>' : '';
-        const isCollapsed = collapsed.includes(s.id);
+        const serverKey = `srv:${s.id}`;
+        const isCollapsed = collapsed.has(serverKey);
         const hasFolders = s.folders && s.folders.length > 0;
         const chevron = hasFolders
-            ? `<span class="server-toggle" data-toggle="${s.id}">${isCollapsed ? '&#x25B8;' : '&#x25BE;'}</span>`
+            ? `<span class="server-toggle" data-toggle-key="${serverKey}">${isCollapsed ? '&#x25B8;' : '&#x25BE;'}</span>`
             : '<span class="server-toggle-spacer"></span>';
         html += `<div class="server-item${sel}" data-id="${s.id}">
             ${chevron}
             <span class="server-label">${esc(s.name)}</span>
             ${syncBadge}
         </div>`;
-        if (s.folders && !isCollapsed) {
-            for (const f of s.folders) {
-                const fsel = s.id === selectedServerId && f.name === selectedFolder ? ' selected' : '';
-                html += `<div class="folder-item${fsel}" data-server="${s.id}" data-folder="${esc(f.name)}">
-                    <span>${esc(f.name)}</span>
-                    <span class="folder-count">${f.count ?? ''}</span>
-                </div>`;
-            }
+        if (hasFolders && !isCollapsed) {
+            const tree = buildFolderTree(s.folders);
+            html += renderFolderTree(tree, s.id, collapsed, 0);
         }
     }
     container.innerHTML = html;
 
-    container.querySelectorAll('.server-toggle').forEach(el => {
+    container.querySelectorAll('[data-toggle-key]').forEach(el => {
         el.addEventListener('click', (e) => {
             e.stopPropagation();
-            toggleServerCollapse(parseInt(el.dataset.toggle));
+            toggleCollapse(el.dataset.toggleKey);
         });
     });
     container.querySelectorAll('.server-item').forEach(el => {

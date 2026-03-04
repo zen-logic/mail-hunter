@@ -21,6 +21,7 @@ from mail_hunter.routes.api import (
     remove_tag,
 )
 from mail_hunter.routes.import_mail import import_upload, import_resolve
+from mail_hunter.routes.sync import sync_endpoint, stop_sync, test_server_connection
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -41,12 +42,20 @@ async def on_shutdown():
 routes = [
     Route("/", homepage),
     WebSocketRoute("/ws", ws_endpoint),
+    # Server sub-routes (more specific paths first)
+    Route("/api/servers/{server_id:int}/sync", sync_endpoint, methods=["GET", "POST"]),
+    Route("/api/servers/{server_id:int}/sync/cancel", stop_sync, methods=["POST"]),
+    Route(
+        "/api/servers/{server_id:int}/test", test_server_connection, methods=["POST"]
+    ),
+    Route("/api/servers/{server_id:int}/mails", list_mails, methods=["GET"]),
+    # Server CRUD
     Route("/api/servers", list_servers, methods=["GET"]),
     Route("/api/servers", create_server, methods=["POST"]),
     Route("/api/servers/{server_id:int}", update_server, methods=["PUT"]),
     Route("/api/servers/{server_id:int}", delete_server, methods=["DELETE"]),
+    # Mail routes
     Route("/api/mails/search", search_mails, methods=["GET"]),
-    Route("/api/servers/{server_id:int}/mails", list_mails, methods=["GET"]),
     Route("/api/mails/{mail_id:int}", get_mail, methods=["GET"]),
     Route("/api/mails/{mail_id:int}", delete_mail, methods=["DELETE"]),
     Route("/api/mails/{mail_id:int}/raw", get_mail_raw, methods=["GET"]),
@@ -57,6 +66,7 @@ routes = [
     ),
     Route("/api/mails/{mail_id:int}/tags", add_tag, methods=["POST"]),
     Route("/api/mails/{mail_id:int}/tags/{tag:str}", remove_tag, methods=["DELETE"]),
+    # Import
     Route("/api/import", import_upload, methods=["POST"]),
     Route("/api/import/resolve", import_resolve, methods=["POST"]),
     Mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static"),
