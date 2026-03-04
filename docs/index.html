@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mail Hunter — Your Mail, Your Server, Your Archive</title>
+<meta name="description" content="Self-hosted email archive. Unify decades of correspondence from IMAP servers, MBOX exports, and EML files into a single searchable collection you control.">
+<meta property="og:title" content="Mail Hunter — Your Mail, Your Server, Your Archive">
+<meta property="og:description" content="Self-hosted email archive. Unify decades of correspondence from IMAP servers, MBOX exports, and EML files into a single searchable collection you control.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mail Hunter">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mail Hunter — Your Mail, Your Server, Your Archive">
+<meta name="twitter:description" content="Self-hosted email archive. Unify decades of correspondence from IMAP servers, MBOX exports, and EML files into a single searchable collection you control.">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --green: #00ff41;
+    --green-dim: #00aa2a;
+    --green-dark: #004d15;
+    --bg: #0a0a0a;
+    --bg-light: #111;
+    --dim: #338033;
+    --bright: #33ff66;
+  }
+
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace;
+    background: var(--bg);
+    color: var(--green);
+    line-height: 1.6;
+    overflow-x: hidden;
+    font-size: 15px;
+  }
+
+  /* ---------- CRT effect ---------- */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,.1) 2px,
+      rgba(0,0,0,.1) 4px
+    );
+  }
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9998;
+    background: radial-gradient(
+      ellipse at center,
+      transparent 50%,
+      rgba(0,0,0,.5) 100%
+    );
+  }
+
+  .wrapper {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  /* ---------- Blinking cursor ---------- */
+  @keyframes blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+  }
+  .cursor {
+    display: inline-block;
+    width: 0.6em;
+    height: 1.1em;
+    background: var(--green);
+    vertical-align: text-bottom;
+    animation: blink 1s step-end infinite;
+  }
+
+  /* ---------- Typing animation ---------- */
+  @keyframes type-title {
+    from { width: 0; }
+    to { width: 11ch; }
+  }
+  @keyframes type-tagline {
+    from { width: 0; }
+    to { width: 52ch; }
+  }
+
+  /* ---------- Hero ---------- */
+  .hero {
+    padding: 3rem 0 2rem;
+    border-bottom: 1px solid var(--green-dark);
+    margin-bottom: 2rem;
+  }
+  .prompt {
+    color: var(--dim);
+  }
+  .hero-title {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: var(--green);
+    text-shadow: 0 0 10px rgba(0,255,65,.4), 0 0 30px rgba(0,255,65,.15);
+    overflow: hidden;
+    white-space: nowrap;
+    width: 11ch;
+    animation: type-title 1.2s steps(11) 0.3s both;
+    display: inline-block;
+  }
+  .hero-tagline {
+    font-size: 1rem;
+    color: var(--green-dim);
+    margin-top: 0.75rem;
+    overflow: hidden;
+    white-space: nowrap;
+    width: 52ch;
+    max-width: 100%;
+    animation: type-tagline 1.5s steps(52) 1.8s both;
+  }
+  .hero-desc {
+    margin-top: 1.25rem;
+    color: var(--dim);
+    font-size: 0.95rem;
+    line-height: 1.7;
+    max-width: 640px;
+  }
+  .hero-cta {
+    margin-top: 1.5rem;
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .btn-cta {
+    display: inline-block;
+    font-family: inherit;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--bg);
+    background: var(--green);
+    border: none;
+    padding: 0.7rem 1.5rem;
+    text-decoration: none;
+    transition: background 0.2s, box-shadow 0.2s;
+    box-shadow: 0 0 10px rgba(0,255,65,.3);
+  }
+  .btn-cta:hover {
+    background: var(--bright);
+    box-shadow: 0 0 20px rgba(0,255,65,.5), 0 0 40px rgba(0,255,65,.2);
+  }
+  .btn-cta .cta-prompt {
+    color: var(--green-dark);
+  }
+  .cta-secondary {
+    display: inline-block;
+    font-family: inherit;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--green);
+    background: transparent;
+    border: 1px solid var(--green);
+    padding: 0.65rem 1.5rem;
+    text-decoration: none;
+    transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+  }
+  .cta-secondary:hover {
+    background: var(--green);
+    color: var(--bg);
+    box-shadow: 0 0 15px rgba(0,255,65,.4);
+  }
+
+  /* ---------- Section headings ---------- */
+  .section-header {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--green);
+    text-shadow: 0 0 8px rgba(0,255,65,.3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--green-dark);
+  }
+
+  /* ---------- Highlight cards ---------- */
+  .highlights {
+    margin-bottom: 2.5rem;
+  }
+  .highlight-card {
+    background: var(--bg-light);
+    border: 1px solid var(--green-dark);
+    padding: 1.5rem 1.75rem;
+    margin-bottom: 1rem;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .highlight-card:hover {
+    border-color: var(--green);
+    box-shadow: 0 0 10px rgba(0,255,65,.25), 0 0 30px rgba(0,255,65,.1);
+  }
+  .highlight-card h3 {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--green);
+    text-shadow: 0 0 6px rgba(0,255,65,.3);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.4rem;
+  }
+  .highlight-card p {
+    font-size: 0.9rem;
+    color: var(--dim);
+    line-height: 1.7;
+  }
+  .highlight-card code {
+    color: var(--green-dim);
+    font-family: inherit;
+  }
+
+  /* ---------- Features grid ---------- */
+  .features {
+    margin-bottom: 2.5rem;
+  }
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1.25rem;
+  }
+  .feature-card {
+    background: var(--bg-light);
+    border: 1px solid var(--green-dark);
+    padding: 1.5rem;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .feature-card:hover {
+    border-color: var(--green);
+    box-shadow: 0 0 10px rgba(0,255,65,.25), 0 0 30px rgba(0,255,65,.1);
+  }
+  .feature-card h3 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--green);
+    text-shadow: 0 0 6px rgba(0,255,65,.3);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.35rem;
+  }
+  .feature-card p {
+    font-size: 0.88rem;
+    color: var(--dim);
+    line-height: 1.7;
+  }
+  .feature-card code {
+    color: var(--green-dim);
+    font-family: inherit;
+  }
+
+  /* ---------- Audience section ---------- */
+  .audience {
+    margin-bottom: 2.5rem;
+  }
+  .audience-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1.25rem;
+  }
+  .audience-card {
+    background: var(--bg-light);
+    border: 1px solid var(--green-dark);
+    padding: 1.25rem 1.5rem;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .audience-card:hover {
+    border-color: var(--green);
+    box-shadow: 0 0 10px rgba(0,255,65,.25), 0 0 30px rgba(0,255,65,.1);
+  }
+  .audience-card h3 {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--green);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.3rem;
+  }
+  .audience-card p {
+    font-size: 0.85rem;
+    color: var(--dim);
+    line-height: 1.6;
+  }
+
+  /* ---------- Tech footer ---------- */
+  .tech {
+    border-top: 1px solid var(--green-dark);
+    padding-top: 2rem;
+    margin-bottom: 1.5rem;
+  }
+  .tech p {
+    color: var(--dim);
+    font-size: 0.92rem;
+    line-height: 1.7;
+  }
+
+  /* ---------- Footer ---------- */
+  footer {
+    padding-top: 2rem;
+    text-align: center;
+    color: var(--dim);
+    font-size: 0.8rem;
+  }
+  footer a {
+    color: var(--green-dim);
+    text-decoration: none;
+  }
+  footer a:hover {
+    color: var(--green);
+    text-shadow: 0 0 8px rgba(0,255,65,.3);
+  }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 640px) {
+    .hero-title { font-size: 1.8rem; }
+    .features-grid { grid-template-columns: 1fr; }
+    .audience-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrapper">
+
+  <section class="hero">
+    <div><span class="prompt">$</span> <span class="hero-title">mail-hunter</span><span class="cursor"></span></div>
+    <div class="hero-tagline">An email archive that unifies decades of mail.</div>
+    <p class="hero-desc">
+      Old IMAP servers you&rsquo;re afraid to close. MBOX exports from
+      providers that no longer exist. EML files rescued from old machines.
+      Mail Hunter pulls them all into one searchable, deduplicated,
+      compressed archive on your own hardware &mdash; before the next
+      provider shuts down.
+    </p>
+    <div class="hero-cta">
+      <a href="https://github.com/zen-logic/mail-hunter" class="btn-cta"><span class="cta-prompt">&gt; </span>./get-mailhunter</a>
+    </div>
+  </section>
+
+  <!-- Highlights -->
+  <section class="highlights">
+    <h2 class="section-header">Why Mail Hunter</h2>
+
+    <div class="highlight-card">
+      <h3>One archive, every account</h3>
+      <p>
+        Connect live IMAP servers for incremental sync. Import EML files
+        and MBOX exports for everything else. Twenty years of email across
+        a dozen providers, searchable from a single browser tab.
+      </p>
+    </div>
+
+    <div class="highlight-card">
+      <h3>Your mail, your disk</h3>
+      <p>
+        Every message is stored locally in a content-addressable archive.
+        Deduplicated by SHA-256 hash, compressed with zstd. No cloud
+        dependency, no subscription, no provider lock-in. Runs on any
+        machine with Python.
+      </p>
+    </div>
+
+    <div class="highlight-card">
+      <h3>Search everything at once</h3>
+      <p>
+        Search across all servers, all folders, all years. Filter by
+        sender, recipient, subject, body text, or date range. Results
+        come back fast because the index is local.
+      </p>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="features">
+    <h2 class="section-header">Features</h2>
+    <div class="features-grid">
+
+      <div class="feature-card">
+        <h3>IMAP Sync</h3>
+        <p>
+          Incremental sync via UID tracking. Respects UIDVALIDITY changes.
+          Sync progress streamed live over WebSocket. Cancel and resume
+          at any time.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <h3>Import</h3>
+        <p>
+          Drag and drop EML files or MBOX archives. Automatic address
+          matching to existing servers. Unmatched addresses prompt for
+          resolution before import.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <h3>Deduplication</h3>
+        <p>
+          Messages are hashed on content. Identical messages across
+          servers and folders are stored once. Duplicate counts shown
+          in the UI.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <h3>Compression</h3>
+        <p>
+          Raw EML files compressed with <code>zstd</code> at level 19.
+          Typical 70&ndash;85% size reduction. Legacy uncompressed files
+          continue to work without migration.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <h3>Tagging</h3>
+        <p>
+          Tag messages with arbitrary labels. Organise across server
+          and folder boundaries. Your taxonomy, not your provider&rsquo;s.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <h3>Legal Hold</h3>
+        <p>
+          Place individual messages on legal hold to prevent deletion.
+          For compliance, disputes, or anything you can&rsquo;t afford
+          to lose.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <h3>Message Preview</h3>
+        <p>
+          View HTML, plain text, and raw source in a sandboxed preview.
+          Download the original EML or individual attachments directly.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <h3>Three-Panel UI</h3>
+        <p>
+          Servers and folders on the left, message list in the middle,
+          detail pane on the right. Resizable panels. Keyboard and mouse.
+          Runs in any browser.
+        </p>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Audience -->
+  <section class="audience">
+    <h2 class="section-header">Who it&rsquo;s for</h2>
+    <div class="audience-grid">
+
+      <div class="audience-card">
+        <h3>Digital archivists</h3>
+        <p>
+          Decades of email across defunct providers, old exports,
+          and accounts you forgot you had. Unify it all before
+          it disappears.
+        </p>
+      </div>
+
+      <div class="audience-card">
+        <h3>Self-hosters</h3>
+        <p>
+          Your data, your server, your rules. No cloud middleman.
+          SQLite database, flat file archive, nothing proprietary.
+        </p>
+      </div>
+
+      <div class="audience-card">
+        <h3>Small businesses</h3>
+        <p>
+          Searchable email archive with legal hold for compliance.
+          No per-seat licensing, no vendor lock-in.
+        </p>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Tech -->
+  <section class="tech">
+    <p>
+      Python &middot; Starlette &middot; SQLite &middot; Vanilla JS.
+      No build step, no framework churn, no external services.
+      Runs anywhere Python runs.
+    </p>
+  </section>
+
+  <footer>
+    <p><a href="https://github.com/zen-logic/mail-hunter">github</a></p>
+    <p style="margin-top:0.5rem;">&copy; 2026 <a href="https://zenlogic.co.uk">Zen Logic Ltd.</a></p>
+  </footer>
+
+</div>
+
+</body>
+</html>
