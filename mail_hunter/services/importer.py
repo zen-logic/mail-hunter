@@ -60,7 +60,7 @@ async def _is_duplicate(db: aiosqlite.Connection, server_id: int, parsed: dict) 
 async def _insert_mail(
     db: aiosqlite.Connection,
     server_id: int,
-    folder_id: int,
+    folder_id: int | None,
     parsed: dict,
     raw_path: str,
     raw_size: int,
@@ -129,113 +129,35 @@ def scan_raw_messages(file_paths: list[str], is_mbox: bool = False) -> list[byte
     return raw_messages
 
 
-async def build_server_cache(db: aiosqlite.Connection) -> dict[str, int]:
-    """Build a mapping of lowercase email address -> server_id from all servers."""
-    rows = await db.execute_fetchall("SELECT id, username FROM servers")
-    cache = {}
-    for r in rows:
-        username = (r["username"] or "").strip().lower()
-        if username:
-            cache[username] = r["id"]
-    return cache
-
-
-def find_server_for_message(parsed: dict, server_cache: dict[str, int]) -> int | None:
-    """Find a matching server for a parsed message by checking from/to addresses."""
-    from_addr = (parsed.get("from_addr") or "").strip().lower()
-    to_addr = (parsed.get("to_addr") or "").strip().lower()
-
-    # Check from_addr
-    if from_addr in server_cache:
-        return server_cache[from_addr]
-
-    # Check to_addr (may contain multiple comma-separated addresses)
-    for addr in to_addr.split(","):
-        addr = addr.strip()
-        # Strip angle brackets and name portion if present
-        if "<" in addr and ">" in addr:
-            addr = addr[addr.index("<") + 1 : addr.index(">")].strip()
-        if addr in server_cache:
-            return server_cache[addr]
-
-    # Check from_addr with angle brackets too
-    if "<" in from_addr and ">" in from_addr:
-        bare = from_addr[from_addr.index("<") + 1 : from_addr.index(">")].strip()
-        if bare in server_cache:
-            return server_cache[bare]
-
-    return None
-
-
-def collect_unmatched_addresses(
-    messages: list[dict], server_cache: dict[str, int]
-) -> dict[str, int]:
-    """For messages with no matching server, collect all unique addresses with counts."""
-    addr_counts: dict[str, int] = {}
-    for parsed in messages:
-        if find_server_for_message(parsed, server_cache) is not None:
-            continue
-        # Collect from and to addresses
-        from_addr = (parsed.get("from_addr") or "").strip().lower()
-        to_addr = (parsed.get("to_addr") or "").strip().lower()
-        for raw in [from_addr] + to_addr.split(","):
-            addr = raw.strip()
-            if "<" in addr and ">" in addr:
-                addr = addr[addr.index("<") + 1 : addr.index(">")].strip()
-            if addr and "@" in addr:
-                addr_counts[addr] = addr_counts.get(addr, 0) + 1
-    return addr_counts
-
-
-async def create_import_server(db: aiosqlite.Connection, address: str) -> int:
-    """Create a server entry for an import-only address (no auth details)."""
+async def create_import_server(db: aiosqlite.Connection, name: str) -> int:
+    """Create a server entry for an imported file (no auth details)."""
     cursor = await db.execute(
         "INSERT INTO servers (name, host, port, username, password, use_ssl, protocol) "
-        "VALUES (?, '', 0, ?, '', 0, 'import')",
-        (address, address),
+        "VALUES (?, '', 0, '', '', 0, 'import')",
+        (name,),
     )
     await db.commit()
     return cursor.lastrowid
 
 
-# folder_cache: server_id -> folder_id
-_folder_cache: dict[int, int] = {}
-
-
 async def run_import(
     db: aiosqlite.Connection,
     raw_messages: list[bytes],
+    server_id: int,
     filename: str = "file",
 ):
-    """Import raw messages, auto-routing each to the correct server by address."""
-    global _folder_cache
-    _folder_cache = {}
-
-    server_cache = await build_server_cache(db)
-
+    """Import raw messages into a specific server. folder_id is NULL (flat)."""
     imported = 0
     skipped = 0
-    unroutable = 0
     message_ids = []
-    server_ids_seen: set[int] = set()
     last_mail_id = None
     total = len(raw_messages)
 
-    await broadcast({"type": "import_started", "filename": filename, "total": total})
+    await broadcast({"type": "import_started", "filename": filename, "total": total, "server_id": server_id})
 
     for i, raw_bytes in enumerate(raw_messages):
         try:
             parsed = parse_message(raw_bytes)
-            server_id = find_server_for_message(parsed, server_cache)
-
-            if server_id is None:
-                unroutable += 1
-                continue
-
-            # Get or create Import folder for this server
-            if server_id not in _folder_cache:
-                _folder_cache[server_id] = await _ensure_folder(db, server_id, "Import")
-            folder_id = _folder_cache[server_id]
 
             if await _is_duplicate(db, server_id, parsed):
                 skipped += 1
@@ -243,9 +165,8 @@ async def run_import(
 
             sha, path = store_message(raw_bytes)
             last_mail_id = await _insert_mail(
-                db, server_id, folder_id, parsed, path, len(raw_bytes)
+                db, server_id, None, parsed, path, len(raw_bytes)
             )
-            server_ids_seen.add(server_id)
             imported += 1
             if parsed["message_id"]:
                 message_ids.append(parsed["message_id"])
@@ -256,15 +177,15 @@ async def run_import(
             elif imported % BATCH_SIZE == 0:
                 await db.commit()
 
-            if imported % BATCH_SIZE == 0:
-                await broadcast(
-                    {
-                        "type": "import_progress",
-                        "count": imported,
-                        "total": total,
-                        "skipped": skipped,
-                    }
-                )
+            await broadcast(
+                {
+                    "type": "import_progress",
+                    "server_id": server_id,
+                    "count": imported,
+                    "total": total,
+                    "skipped": skipped,
+                }
+            )
         except Exception:
             logger.exception("Failed to import message %d", i)
 
@@ -278,9 +199,8 @@ async def run_import(
             "type": "import_completed",
             "count": imported,
             "skipped": skipped,
-            "unroutable": unroutable,
             "total": total,
-            "server_id": next(iter(server_ids_seen)) if len(server_ids_seen) == 1 else None,
+            "server_id": server_id,
             "mail_id": last_mail_id if imported == 1 else None,
         }
     )

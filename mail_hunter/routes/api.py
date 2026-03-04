@@ -95,21 +95,36 @@ async def update_server(request: Request):
     username = data.get("username", "").strip()
     password = data.get("password", "")
 
-    if not host or not username:
-        return JSONResponse({"error": "host and username required"}, status_code=400)
-
     request_write_lock()
     db = await get_db()
-    if password:
+
+    # Check if this is an import-only server
+    row = await db.execute_fetchall(
+        "SELECT protocol FROM servers WHERE id = ?", (server_id,)
+    )
+    if not row:
+        return JSONResponse({"error": "server not found"}, status_code=404)
+
+    if row[0]["protocol"] == "import":
+        # Import servers: only the name can be updated
+        if not name:
+            return JSONResponse({"error": "name required"}, status_code=400)
         await db.execute(
-            "UPDATE servers SET name=?, host=?, port=?, username=?, password=? WHERE id=?",
-            (name or host, host, port, username, password, server_id),
+            "UPDATE servers SET name=? WHERE id=?", (name, server_id)
         )
     else:
-        await db.execute(
-            "UPDATE servers SET name=?, host=?, port=?, username=? WHERE id=?",
-            (name or host, host, port, username, server_id),
-        )
+        if not host or not username:
+            return JSONResponse({"error": "host and username required"}, status_code=400)
+        if password:
+            await db.execute(
+                "UPDATE servers SET name=?, host=?, port=?, username=?, password=? WHERE id=?",
+                (name or host, host, port, username, password, server_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE servers SET name=?, host=?, port=?, username=? WHERE id=?",
+                (name or host, host, port, username, server_id),
+            )
     await db.commit()
     return JSONResponse({"ok": True})
 
@@ -424,6 +439,20 @@ async def get_mail_preview(request: Request):
     raw_source = raw_bytes.decode("utf-8", errors="replace")
 
     return JSONResponse({"body_text": body_text, "body_html": body_html, "raw_source": raw_source})
+
+
+async def get_stats(request: Request):
+    db = await get_db()
+    row = await db.execute_fetchall(
+        "SELECT COUNT(*) as messages, "
+        "COALESCE(SUM(CASE WHEN dup_count > 0 THEN 1 ELSE 0 END), 0) as duplicates, "
+        "COALESCE(SUM(raw_size), 0) as archive_size "
+        "FROM mails"
+    )
+    stats = dict(row[0]) if row else {"messages": 0, "duplicates": 0, "archive_size": 0}
+    server_row = await db.execute_fetchall("SELECT COUNT(*) as cnt FROM servers")
+    stats["servers"] = server_row[0]["cnt"] if server_row else 0
+    return JSONResponse(stats)
 
 
 async def get_version(request: Request):

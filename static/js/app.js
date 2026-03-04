@@ -24,7 +24,8 @@ function formatSize(bytes) {
     if (!bytes) return '';
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / 1048576).toFixed(1) + ' MB';
+    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+    return (bytes / 1073741824).toFixed(1) + ' GB';
 }
 
 // ── Confirm dialog ─────────────────────────────────────
@@ -250,12 +251,17 @@ function handleWSMessage(msg) {
     switch (msg.type) {
         case 'import_started':
             ActivityLog.add(`Import started: ${msg.filename || 'file'}`);
+            document.getElementById('status-activity').textContent = `Importing ${msg.filename || 'file'}...`;
+            loadServers();
             break;
         case 'import_progress':
-            ActivityLog.add(`Imported ${msg.count} messages${msg.total ? ' of ' + msg.total : ''}...`);
+            document.getElementById('status-activity').textContent =
+                `Importing: ${msg.count}${msg.total ? '/' + msg.total : ''} messages`;
             break;
         case 'import_completed':
-            ActivityLog.add(`Import complete: ${msg.count} messages imported`);
+            ActivityLog.add(`Import complete: ${msg.count} messages imported, ${msg.skipped} skipped`);
+            document.getElementById('status-activity').textContent = '';
+            loadStats();
             if (msg.server_id) {
                 selectedServerId = msg.server_id;
                 selectedFolder = null;
@@ -291,6 +297,10 @@ function handleWSMessage(msg) {
             if (msg.server_id === selectedServerId) renderServerDetail();
             break;
         case 'sync_progress': {
+            if (msg.server_id && syncingServerId !== msg.server_id) {
+                syncingServerId = msg.server_id;
+                renderServers(allServers);
+            }
             let statusText = `Syncing: ${msg.folder}`;
             let logDetail = statusText;
             if (msg.total) {
@@ -316,11 +326,13 @@ function handleWSMessage(msg) {
             syncingServerId = null;
             if (fullSyncServerId === msg.server_id) fullSyncServerId = null;
             renderSyncStatus(null);
-            loadServers();
-            if (msg.server_id === selectedServerId) {
-                loadMails();
-                renderServerDetail();
-            }
+            loadStats();
+            loadServers().then(() => {
+                if (msg.server_id === selectedServerId) {
+                    loadMails();
+                    renderServerDetail();
+                }
+            });
             break;
         case 'sync_cancelled':
             ActivityLog.add(`Sync cancelled (${msg.imported} imported before cancel)`);
@@ -348,6 +360,24 @@ function handleWSMessage(msg) {
 
 connectWS();
 
+// ── Global stats ────────────────────────────────────────
+
+async function loadStats() {
+    try {
+        const resp = await fetch('/api/stats');
+        if (!resp.ok) return;
+        const s = await resp.json();
+        const el = document.getElementById('status-stats');
+        el.innerHTML =
+            `Servers: <strong>${s.servers.toLocaleString()}</strong> &nbsp; ` +
+            `Messages: <strong>${s.messages.toLocaleString()}</strong> &nbsp; ` +
+            `Duplicates: <strong>${s.duplicates.toLocaleString()}</strong> &nbsp; ` +
+            `Archive: <strong>${formatSize(s.archive_size)}</strong>`;
+    } catch (err) {
+        console.error('Failed to load stats:', err);
+    }
+}
+
 // ── Sync status ─────────────────────────────────────────
 
 let syncingServerId = null;
@@ -356,7 +386,7 @@ const statusActivity = document.getElementById('status-activity');
 
 function renderSyncStatus(detail) {
     if (!detail) {
-        statusActivity.innerHTML = '';
+        statusActivity.innerHTML = '<span class="status-idle">Idle</span>';
         return;
     }
     statusActivity.innerHTML = `
@@ -666,7 +696,7 @@ function showServerForm(existing) {
             username: document.getElementById('sf-username').value.trim(),
             password: document.getElementById('sf-password').value,
         };
-        if (!data.host || !data.username) return;
+        if (!existing && (!data.host || !data.username)) return;
         if (!data.name) data.name = data.host;
 
         try {
@@ -701,14 +731,21 @@ function showServerForm(existing) {
 const importModal = document.getElementById('import-modal');
 let importFiles = [];
 
+function importServerName(files) {
+    const ts = formatDate(new Date().toISOString());
+    if (files.length === 1) {
+        const stem = files[0].name.replace(/\.[^.]+$/, '');
+        return `Import: ${stem} \u2014 ${ts}`;
+    }
+    return `Import: ${ts}`;
+}
+
 function openImport() {
     importModal.classList.remove('hidden');
     importFiles = [];
     renderImportFiles();
     document.getElementById('import-status').textContent = '';
     document.getElementById('import-go').disabled = true;
-    document.getElementById('import-resolve').classList.add('hidden');
-    document.getElementById('import-resolve').innerHTML = '';
 }
 
 function closeImport() {
@@ -722,17 +759,6 @@ importModal.addEventListener('click', (e) => {
     if (e.target === importModal) closeImport();
 });
 
-function getImportFormat() {
-    return document.querySelector('input[name="import-format"]:checked')?.value || 'eml';
-}
-
-document.querySelectorAll('input[name="import-format"]').forEach(radio => {
-    radio.addEventListener('change', () => {
-        importFiles = [];
-        renderImportFiles();
-        updateImportButton();
-    });
-});
 
 function updateImportButton() {
     document.getElementById('import-go').disabled = !importFiles.length;
@@ -743,9 +769,8 @@ const dropzone = document.getElementById('import-dropzone');
 const fileInput = document.getElementById('import-file-input');
 
 dropzone.addEventListener('click', () => {
-    const fmt = getImportFormat();
-    fileInput.accept = fmt === 'mbox' ? '.mbox' : '.eml';
-    fileInput.multiple = fmt === 'eml';
+    fileInput.accept = '.eml,.mbox';
+    fileInput.multiple = true;
     fileInput.click();
 });
 
@@ -770,14 +795,8 @@ fileInput.addEventListener('change', () => {
 });
 
 function addImportFiles(fileList) {
-    const fmt = getImportFormat();
     for (const f of fileList) {
-        if (fmt === 'mbox') {
-            importFiles = [f];
-            break;
-        } else {
-            importFiles.push(f);
-        }
+        importFiles.push(f);
     }
     renderImportFiles();
     updateImportButton();
@@ -807,7 +826,6 @@ function renderImportFiles() {
 document.getElementById('import-go').addEventListener('click', async () => {
     if (!importFiles.length) return;
 
-    const fmt = getImportFormat();
     const statusEl = document.getElementById('import-status');
     const btn = document.getElementById('import-go');
     btn.disabled = true;
@@ -815,10 +833,10 @@ document.getElementById('import-go').addEventListener('click', async () => {
 
     try {
         const formData = new FormData();
-        formData.append('format', fmt);
         for (const f of importFiles) {
             formData.append('files', f);
         }
+        formData.append('server_name', importServerName(importFiles));
 
         const resp = await fetch('/api/import', { method: 'POST', body: formData });
         const result = await resp.json();
@@ -830,71 +848,13 @@ document.getElementById('import-go').addEventListener('click', async () => {
         }
 
         if (result.ok) {
-            // All messages matched existing servers — import started
             closeImport();
-            return;
-        }
-
-        if (result.unmatched) {
-            closeImport();
-            showAddressResolver(result.import_id, result.unmatched);
         }
     } catch (err) {
         statusEl.textContent = `Error: ${err.message}`;
         btn.disabled = false;
     }
 });
-
-function showAddressResolver(importId, unmatched) {
-    const modal = document.getElementById('confirm-modal');
-    document.getElementById('confirm-title').textContent = 'Select Address';
-
-    const msgEl = document.getElementById('confirm-message');
-    msgEl.innerHTML = `
-        <span>Which address should these messages be filed under?</span>
-        <div class="import-address-list" style="margin-top: 0.5rem;">
-            ${unmatched.map((a, i) => `
-                <label class="import-address-item">
-                    <input type="radio" name="import-address" value="${esc(a.address)}"${i === 0 ? ' checked' : ''}>
-                    <span>${esc(a.address)}</span>
-                </label>
-            `).join('')}
-        </div>
-    `;
-
-    const okBtn = document.getElementById('confirm-ok');
-    okBtn.textContent = 'Import';
-    okBtn.className = 'btn btn-sm btn-primary';
-    modal.classList.remove('hidden');
-
-    function cleanup() {
-        modal.classList.add('hidden');
-        okBtn.removeEventListener('click', onOk);
-        document.getElementById('confirm-cancel').removeEventListener('click', onCancel);
-        modal.removeEventListener('click', onBackdrop);
-    }
-    async function onOk() {
-        const selected = msgEl.querySelector('input[name="import-address"]:checked')?.value;
-        cleanup();
-        if (selected) {
-            try {
-                await fetch('/api/import/resolve', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ import_id: importId, create_servers: [selected] }),
-                });
-            } catch (err) {
-                ActivityLog.add(`Import error: ${err.message}`);
-            }
-        }
-    }
-    function onCancel() { cleanup(); }
-    function onBackdrop(e) { if (e.target === modal) cleanup(); }
-
-    okBtn.addEventListener('click', onOk);
-    document.getElementById('confirm-cancel').addEventListener('click', onCancel);
-    modal.addEventListener('click', onBackdrop);
-}
 
 // ── Global drag-drop import ─────────────────────────────
 
@@ -935,18 +895,13 @@ document.addEventListener('drop', (e) => {
 });
 
 async function startDirectImport(files) {
-    // Auto-detect format from extension
-    const hasEml = files.some(f => f.name.toLowerCase().endsWith('.eml'));
-    const hasMbox = files.some(f => f.name.toLowerCase().endsWith('.mbox'));
-    const fmt = hasMbox && !hasEml ? 'mbox' : 'eml';
-
     ActivityLog.add(`Uploading ${files.length} file(s)...`);
 
     const formData = new FormData();
-    formData.append('format', fmt);
     for (const f of files) {
         formData.append('files', f);
     }
+    formData.append('server_name', importServerName(files));
 
     try {
         const resp = await fetch('/api/import', { method: 'POST', body: formData });
@@ -957,13 +912,8 @@ async function startDirectImport(files) {
             return;
         }
 
-        if (result.ok) {
-            // All matched — import running
-            return;
-        }
-
-        if (result.unmatched) {
-            showAddressResolver(result.import_id, result.unmatched);
+        if (!result.ok) {
+            ActivityLog.add(`Import error: ${result.error || 'unknown'}`);
         }
     } catch (err) {
         ActivityLog.add(`Import error: ${err.message}`);
@@ -1623,6 +1573,7 @@ function renderDetail(mail) {
                 applyFilterAndRender();
                 renderServerDetail();
                 loadServers();
+                loadStats();
             } else {
                 const err = await resp.json();
                 ActivityLog.add(`Delete failed: ${err.error || 'unknown error'}`);
@@ -1705,3 +1656,5 @@ aboutModal.addEventListener('click', (e) => {
 // ── Init ────────────────────────────────────────────────
 
 loadServers();
+loadStats();
+renderSyncStatus(null);

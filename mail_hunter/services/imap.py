@@ -14,6 +14,7 @@ from mail_hunter.ws import broadcast
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 100
+MAX_RECONNECTS = 3
 
 
 async def _save_sync_state(db, server_id, folder_name, uid_validity, last_uid):
@@ -180,6 +181,7 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
     skipped = 0
     errors = 0
     message_ids = []
+    sync_cleared = False
 
     try:
         await broadcast(
@@ -226,7 +228,11 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
             }
         )
 
-        for folder_name in folders:
+        reconnects = 0
+        folder_idx = 0
+        while folder_idx < len(folders):
+            folder_name = folders[folder_idx]
+
             if server_id in _cancel_requested:
                 _active_syncs.discard(server_id)
                 await broadcast(
@@ -247,78 +253,79 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                 }
             )
 
-            # Get sync state for this folder
-            row = await db.execute_fetchall(
-                "SELECT uid_validity, last_uid FROM sync_state "
-                "WHERE server_id = ? AND folder_name = ?",
-                (server_id, folder_name),
-            )
-            saved_uid_validity = row[0]["uid_validity"] if row else None
-            saved_last_uid = row[0]["last_uid"] if row else 0
-
-            logger.info(
-                "Sync %s/%s: last_uid=%d",
-                server["name"], folder_name, saved_last_uid,
-            )
-
-            uid_validity, new_uids = await asyncio.to_thread(
-                _fetch_uids_since, conn, folder_name, saved_last_uid
-            )
-
-            # UID validity changed — reset and re-fetch all
-            if (
-                uid_validity is not None
-                and saved_uid_validity is not None
-                and uid_validity != saved_uid_validity
-            ):
-                logger.warning(
-                    "UIDVALIDITY changed for %s/%s: %s -> %s, re-syncing folder",
-                    server["name"],
-                    folder_name,
-                    saved_uid_validity,
-                    uid_validity,
+            try:
+                # Get sync state for this folder
+                row = await db.execute_fetchall(
+                    "SELECT uid_validity, last_uid FROM sync_state "
+                    "WHERE server_id = ? AND folder_name = ?",
+                    (server_id, folder_name),
                 )
-                saved_last_uid = 0
+                saved_uid_validity = row[0]["uid_validity"] if row else None
+                saved_last_uid = row[0]["last_uid"] if row else 0
+
+                logger.info(
+                    "Sync %s/%s: last_uid=%d",
+                    server["name"], folder_name, saved_last_uid,
+                )
+
                 uid_validity, new_uids = await asyncio.to_thread(
-                    _fetch_uids_since, conn, folder_name, 0
+                    _fetch_uids_since, conn, folder_name, saved_last_uid
                 )
 
-            if not new_uids:
-                logger.info("Sync %s/%s: up to date", server["name"], folder_name)
-                await _save_sync_state(db, server_id, folder_name, uid_validity, saved_last_uid)
-                continue
+                # UID validity changed — reset and re-fetch all
+                if (
+                    uid_validity is not None
+                    and saved_uid_validity is not None
+                    and uid_validity != saved_uid_validity
+                ):
+                    logger.warning(
+                        "UIDVALIDITY changed for %s/%s: %s -> %s, re-syncing folder",
+                        server["name"],
+                        folder_name,
+                        saved_uid_validity,
+                        uid_validity,
+                    )
+                    saved_last_uid = 0
+                    uid_validity, new_uids = await asyncio.to_thread(
+                        _fetch_uids_since, conn, folder_name, 0
+                    )
 
-            logger.info(
-                "Sync %s/%s: %d new UIDs (from %d)",
-                server["name"], folder_name, len(new_uids), new_uids[0],
-            )
+                if not new_uids:
+                    logger.info("Sync %s/%s: up to date", server["name"], folder_name)
+                    await _save_sync_state(db, server_id, folder_name, uid_validity, saved_last_uid)
+                    folder_idx += 1
+                    continue
 
-            folder_id = await _ensure_folder(db, server_id, folder_name)
-            max_uid = saved_last_uid
+                logger.info(
+                    "Sync %s/%s: %d new UIDs (from %d)",
+                    server["name"], folder_name, len(new_uids), new_uids[0],
+                )
 
-            count_row = await db.execute_fetchall(
-                "SELECT COUNT(*) as cnt FROM mails WHERE folder_id = ?",
-                (folder_id,),
-            )
-            existing_count = count_row[0]["cnt"] if count_row else 0
-            folder_count = existing_count
+                folder_id = await _ensure_folder(db, server_id, folder_name)
+                max_uid = saved_last_uid
 
-            await broadcast(
-                {
-                    "type": "sync_progress",
-                    "server_id": server_id,
-                    "folder": folder_name,
-                    "count": 0,
-                    "total": len(new_uids),
-                    "existing_count": existing_count,
-                }
-            )
+                count_row = await db.execute_fetchall(
+                    "SELECT COUNT(*) as cnt FROM mails WHERE folder_id = ?",
+                    (folder_id,),
+                )
+                existing_count = count_row[0]["cnt"] if count_row else 0
+                folder_count = existing_count
 
-            for i, uid in enumerate(new_uids):
-                if server_id in _cancel_requested:
-                    break
+                await broadcast(
+                    {
+                        "type": "sync_progress",
+                        "server_id": server_id,
+                        "folder": folder_name,
+                        "count": 0,
+                        "total": len(new_uids),
+                        "existing_count": existing_count,
+                    }
+                )
 
-                try:
+                for i, uid in enumerate(new_uids):
+                    if server_id in _cancel_requested:
+                        break
+
                     logger.info(
                         "Sync %s/%s [%d/%d]: fetching UID %d",
                         server["name"], folder_name, i + 1, len(new_uids), uid,
@@ -384,16 +391,40 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                     if mail_data:
                         msg_out["mail"] = mail_data
                     await broadcast(msg_out)
-                except Exception:
-                    logger.exception(
-                        "Failed to fetch/process UID %d in %s", uid, folder_name
-                    )
-                    errors += 1
 
-            await db.commit()
-            await _save_sync_state(db, server_id, folder_name, uid_validity, max_uid)
-            if check_write_lock_requested():
-                await asyncio.sleep(0.2)
+                await db.commit()
+                await _save_sync_state(db, server_id, folder_name, uid_validity, max_uid)
+                if check_write_lock_requested():
+                    await asyncio.sleep(0.2)
+                reconnects = 0  # successful folder resets counter
+                folder_idx += 1
+
+            except imaplib.IMAP4.abort as e:
+                logger.warning(
+                    "Sync %s/%s: connection lost (%s), reconnecting...",
+                    server["name"], folder_name, e,
+                )
+                reconnects += 1
+                if reconnects > MAX_RECONNECTS:
+                    raise Exception(
+                        f"Connection lost {reconnects} times, giving up"
+                    ) from e
+                # Save progress so far
+                await db.commit()
+                try:
+                    await asyncio.to_thread(conn.logout)
+                except Exception:
+                    pass
+                conn = await asyncio.to_thread(
+                    _connect,
+                    server["host"],
+                    server["port"],
+                    server["username"],
+                    server["password"],
+                    server.get("use_ssl", True),
+                )
+                logger.info("Reconnected, retrying folder %s", folder_name)
+                # Don't increment folder_idx — retry the same folder from saved state
 
         # Recalculate dup counts
         if message_ids:
@@ -417,18 +448,14 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                 }
             )
 
+        # Success or user cancel — clear the flag
+        sync_cleared = True
+
     except asyncio.CancelledError:
         logger.info("Sync for server %d interrupted by shutdown, will resume on restart", server_id)
-        if conn:
-            try:
-                await asyncio.to_thread(conn.logout)
-            except Exception:
-                pass
-        await db.close()
-        _active_syncs.discard(server_id)
-        return
+        sync_cleared = False
     except Exception as e:
-        logger.exception("Sync failed for server %d", server_id)
+        logger.exception("Sync failed for server %d, will retry on restart", server_id)
         await broadcast(
             {
                 "type": "sync_error",
@@ -436,20 +463,21 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                 "error": str(e),
             }
         )
+        sync_cleared = False
     finally:
         if conn:
             try:
                 await asyncio.to_thread(conn.logout)
             except Exception:
                 pass
-        # Clear syncing flag — only reached on completion, cancel, or error (not shutdown)
-        try:
-            await db.execute(
-                "UPDATE servers SET syncing = 0 WHERE id = ?", (server_id,)
-            )
-            await db.commit()
-        except Exception:
-            pass
+        if sync_cleared:
+            try:
+                await db.execute(
+                    "UPDATE servers SET syncing = 0 WHERE id = ?", (server_id,)
+                )
+                await db.commit()
+            except Exception:
+                pass
         await db.close()
         _active_syncs.discard(server_id)
         _cancel_requested.discard(server_id)

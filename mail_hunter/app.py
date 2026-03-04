@@ -23,9 +23,10 @@ from mail_hunter.routes.api import (
     get_mail_attachment,
     add_tag,
     remove_tag,
+    get_stats,
     get_version,
 )
-from mail_hunter.routes.import_mail import import_upload, import_resolve
+from mail_hunter.routes.import_mail import import_upload
 from mail_hunter.routes.sync import sync_endpoint, stop_sync, test_server_connection
 from mail_hunter.services.imap import sync_server
 
@@ -93,11 +94,11 @@ routes = [
     ),
     Route("/api/mails/{mail_id:int}/tags", add_tag, methods=["POST"]),
     Route("/api/mails/{mail_id:int}/tags/{tag:str}", remove_tag, methods=["DELETE"]),
-    # Version
+    # Stats / version
+    Route("/api/stats", get_stats, methods=["GET"]),
     Route("/api/version", get_version, methods=["GET"]),
     # Import
     Route("/api/import", import_upload, methods=["POST"]),
-    Route("/api/import/resolve", import_resolve, methods=["POST"]),
     Mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static"),
 ]
 

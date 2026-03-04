@@ -273,11 +273,26 @@ body {
     background: var(--color-status-error);
 }
 
+#status-stats {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    white-space: nowrap;
+}
+
+#status-stats strong {
+    color: var(--color-text);
+}
+
 #status-activity {
     flex: 1;
     display: flex;
     align-items: center;
     gap: 0.5rem;
+}
+
+.status-idle {
+    color: var(--color-text-muted);
 }
 
 .status-sync-text {
