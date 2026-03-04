@@ -69,8 +69,8 @@ async def _insert_mail(
     cursor = await db.execute(
         "INSERT INTO mails (server_id, folder_id, message_id, subject, from_name, from_addr, "
         "to_addr, cc_addr, reply_to, in_reply_to, references_header, date, size, "
-        "body_preview, body_text, attachment_count, content_hash, raw_path, raw_size) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "body_text, attachment_count, content_hash, raw_path, raw_size) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             server_id,
             folder_id,
@@ -85,7 +85,6 @@ async def _insert_mail(
             parsed["references_header"],
             parsed["date"],
             parsed["size"],
-            parsed["body_preview"],
             parsed["body_text"],
             parsed["attachment_count"],
             parsed["content_hash"],

@@ -174,7 +174,7 @@ async def seed():
 
             cur = await db.execute(
                 "INSERT INTO mails (server_id, folder_id, uid, message_id, subject, "
-                "from_name, from_addr, to_addr, date, size, unread, body_preview, attachment_count) "
+                "from_name, from_addr, to_addr, date, size, unread, body_text, attachment_count) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     server_id,

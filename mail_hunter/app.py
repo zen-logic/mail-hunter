@@ -16,6 +16,7 @@ from mail_hunter.routes.api import (
     get_mail,
     delete_mail,
     get_mail_raw,
+    get_mail_preview,
     get_mail_attachment,
     add_tag,
     remove_tag,
@@ -59,6 +60,7 @@ routes = [
     Route("/api/mails/{mail_id:int}", get_mail, methods=["GET"]),
     Route("/api/mails/{mail_id:int}", delete_mail, methods=["DELETE"]),
     Route("/api/mails/{mail_id:int}/raw", get_mail_raw, methods=["GET"]),
+    Route("/api/mails/{mail_id:int}/preview", get_mail_preview, methods=["GET"]),
     Route(
         "/api/mails/{mail_id:int}/attachments/{index:int}",
         get_mail_attachment,

@@ -60,14 +60,60 @@ function showConfirm(message, { title = 'Confirm', okLabel = 'Delete', okClass =
 
 // ── Message preview dialog ─────────────────────────────
 
-function showMessagePreview(subject, body) {
+function showMessagePreview(mail, bodyText, bodyHtml, rawSource) {
     const modal = document.getElementById('preview-modal');
-    document.getElementById('preview-title').textContent = subject || '(no subject)';
-    document.getElementById('preview-body').textContent = body || '';
+    const previewBody = document.getElementById('preview-body');
+    const previewRaw = document.getElementById('preview-raw');
+    const previewIframe = document.getElementById('preview-iframe');
+    const toggle = document.getElementById('preview-toggle');
+    const btnHtml = document.getElementById('preview-btn-html');
+    const btnText = document.getElementById('preview-btn-text');
+    const btnRaw = document.getElementById('preview-btn-raw');
+    const headers = document.getElementById('preview-headers');
+
+    document.getElementById('preview-title').textContent = mail.subject || '(no subject)';
+
+    let headerHtml = `<span class="label">From</span><span class="value">${esc(mail.from_name ? `${mail.from_name} <${mail.from_addr}>` : mail.from_addr || '')}</span>`;
+    headerHtml += `<span class="label">To</span><span class="value">${esc(mail.to_addr || '')}</span>`;
+    headerHtml += `<span class="label">CC</span><span class="value">${esc(mail.cc_addr || '')}</span>`;
+    headerHtml += `<span class="label">Date</span><span class="value">${formatDate(mail.date)}</span>`;
+    headers.innerHTML = headerHtml;
+
+    previewBody.textContent = bodyText || '';
+    previewRaw.textContent = rawSource || '';
+
+    const allBtns = [btnHtml, btnText, btnRaw];
+    const allViews = [previewIframe, previewBody, previewRaw];
+
+    function activate(btn, view) {
+        allBtns.forEach(b => b.classList.remove('active'));
+        allViews.forEach(v => v.classList.add('hidden'));
+        btn.classList.add('active');
+        view.classList.remove('hidden');
+        if (view === previewIframe) previewIframe.srcdoc = bodyHtml;
+    }
+
+    toggle.classList.remove('hidden');
+    if (bodyHtml) {
+        btnHtml.classList.remove('hidden');
+        activate(btnHtml, previewIframe);
+    } else {
+        btnHtml.classList.add('hidden');
+        activate(btnText, previewBody);
+    }
+
+    btnHtml.onclick = () => activate(btnHtml, previewIframe);
+    btnText.onclick = () => activate(btnText, previewBody);
+    btnRaw.onclick = () => activate(btnRaw, previewRaw);
+
     modal.classList.remove('hidden');
 
     function close() {
         modal.classList.add('hidden');
+        previewIframe.srcdoc = '';
+        btnHtml.onclick = null;
+        btnText.onclick = null;
+        btnRaw.onclick = null;
         document.getElementById('preview-close').removeEventListener('click', close);
         modal.removeEventListener('click', onBackdrop);
     }
@@ -1422,7 +1468,7 @@ function renderDetail(mail) {
             <div class="detail-field"><span class="label">To</span><span class="value">${esc(mail.to_addr || '')}</span></div>
             <div class="detail-field"><span class="label">Date</span><span class="value">${formatDate(mail.date)}</span></div>
             <div class="detail-field"><span class="label">Size</span><span class="value">${formatSize(mail.size)}</span></div>
-            ${mail.cc_addr ? `<div class="detail-field"><span class="label">CC</span><span class="value">${esc(mail.cc_addr)}</span></div>` : ''}
+            <div class="detail-field"><span class="label">CC</span><span class="value">${esc(mail.cc_addr || '')}</span></div>
         </div>
         ${mail.attachments?.length ? `<div class="detail-section">
             <h3>Attachments</h3>
@@ -1443,7 +1489,7 @@ function renderDetail(mail) {
         </div>
         <div class="detail-section">
             <div class="detail-btn-group">
-                ${(mail.body_text || mail.body_preview) ? `<button class="btn" id="btn-view-message">View Message</button>` : ''}
+                ${mail.raw_path ? `<button class="btn" id="btn-view-message">View Message</button>` : ''}
                 ${mail.raw_path ? `<button class="btn" id="btn-download-eml">Download EML</button>` : ''}
                 <button class="btn btn-danger" id="btn-delete-mail">Delete Message</button>
             </div>
@@ -1451,8 +1497,15 @@ function renderDetail(mail) {
     `;
 
     // View message
-    document.getElementById('btn-view-message')?.addEventListener('click', () => {
-        showMessagePreview(mail.subject, mail.body_text || mail.body_preview);
+    document.getElementById('btn-view-message')?.addEventListener('click', async () => {
+        try {
+            const res = await fetch(`/api/mails/${mail.id}/preview`);
+            if (!res.ok) return;
+            const data = await res.json();
+            showMessagePreview(mail, data.body_text, data.body_html, data.raw_source);
+        } catch (e) {
+            // ignore
+        }
     });
 
     // Download EML

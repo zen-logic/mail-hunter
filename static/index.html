@@ -183,9 +183,17 @@
         <div class="modal-dialog modal-dialog-lg">
             <div class="settings-header">
                 <span class="modal-title" id="preview-title"></span>
+                <div class="preview-toggle hidden" id="preview-toggle">
+                    <button class="btn btn-sm active" id="preview-btn-html">HTML</button>
+                    <button class="btn btn-sm" id="preview-btn-text">Text</button>
+                    <button class="btn btn-sm" id="preview-btn-raw">Raw</button>
+                </div>
                 <button class="btn-close" id="preview-close">&times;</button>
             </div>
-            <div class="preview-body" id="preview-body"></div>
+            <div class="preview-headers" id="preview-headers"></div>
+            <div class="preview-body hidden" id="preview-body"></div>
+            <div class="preview-body preview-raw hidden" id="preview-raw"></div>
+            <iframe class="preview-iframe hidden" id="preview-iframe" sandbox=""></iframe>
         </div>
     </div>
 

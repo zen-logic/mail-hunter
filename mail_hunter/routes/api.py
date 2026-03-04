@@ -1,8 +1,11 @@
+import email
+import email.policy
 from pathlib import Path
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from mail_hunter.db import get_db, request_write_lock
+from mail_hunter.services.parser import _extract_body, _extract_body_html
 from mail_hunter.services.store import extract_attachment_from_path
 
 SORT_COLUMNS = {
@@ -160,7 +163,7 @@ async def search_mails(request: Request):
         params.append(f"%{subject_q}%")
 
     if body_q:
-        conditions.append("body_preview LIKE ?")
+        conditions.append("body_text LIKE ?")
         params.append(f"%{body_q}%")
 
     if date_from:
@@ -376,3 +379,30 @@ async def get_mail_attachment(request: Request):
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+async def get_mail_preview(request: Request):
+    """Return body_text and body_html parsed from the raw EML on disk."""
+    mail_id = request.path_params["mail_id"]
+    db = await get_db()
+    row = await db.execute_fetchall(
+        "SELECT raw_path FROM mails WHERE id = ?", (mail_id,)
+    )
+    if not row:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    raw_path = row[0]["raw_path"]
+    if not raw_path:
+        return JSONResponse({"error": "no raw message stored"}, status_code=404)
+
+    try:
+        raw_bytes = Path(raw_path).read_bytes()
+    except FileNotFoundError:
+        return JSONResponse({"error": "raw message file missing"}, status_code=404)
+
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+    body_text = _extract_body(msg)
+    body_html = _extract_body_html(msg)
+    raw_source = raw_bytes.decode("utf-8", errors="replace")
+
+    return JSONResponse({"body_text": body_text, "body_html": body_html, "raw_source": raw_source})

@@ -36,7 +36,6 @@ CREATE TABLE IF NOT EXISTS mails (
     date TEXT,
     size INTEGER,
     unread INTEGER NOT NULL DEFAULT 0,
-    body_preview TEXT,
     attachment_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -109,6 +108,8 @@ MIGRATIONS = [
         "sync_enabled",
         "ALTER TABLE servers ADD COLUMN sync_enabled INTEGER NOT NULL DEFAULT 1",
     ),
+    # drop unused columns
+    ("mails", "body_preview", "ALTER TABLE mails DROP COLUMN body_preview"),
     # attachments columns
     (
         "attachments",

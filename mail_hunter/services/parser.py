@@ -37,7 +37,6 @@ def parse_message(raw_bytes: bytes) -> dict:
 
     # Extract body text
     body_text = _extract_body(msg)
-    body_preview = (body_text or "")[:500]
 
     # Extract attachments metadata
     attachments = _extract_attachments(msg)
@@ -61,12 +60,22 @@ def parse_message(raw_bytes: bytes) -> dict:
         "references_header": references,
         "date": date_iso,
         "body_text": body_text,
-        "body_preview": body_preview,
         "attachment_count": attachment_count,
         "attachments": attachments,
         "content_hash": content_hash,
         "size": len(raw_bytes),
     }
+
+
+def _extract_body_html(msg) -> str | None:
+    """Extract HTML body if available."""
+    html_part = msg.get_body(preferencelist=("html",))
+    if html_part:
+        try:
+            return html_part.get_content()
+        except Exception:
+            pass
+    return None
 
 
 def _extract_body(msg) -> str | None:
