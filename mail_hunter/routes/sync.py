@@ -59,7 +59,8 @@ async def sync_endpoint(request: Request):
                 pass
         full = True  # purge implies full
 
-    asyncio.create_task(sync_server(server_id, server, full=full))
+    start_folder = request.query_params.get("folder")
+    asyncio.create_task(sync_server(server_id, server, full=full, start_folder=start_folder))
     return JSONResponse({"ok": True})
 
 

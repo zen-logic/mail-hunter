@@ -85,6 +85,7 @@ body {
     font-size: var(--font-size-xl);
     font-weight: var(--font-weight-semibold);
     white-space: nowrap;
+    cursor: pointer;
 }
 
 .toolbar-actions {
@@ -585,6 +586,21 @@ body {
     line-height: 1.3;
 }
 
+.detail-location {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    margin-top: 0.25rem;
+}
+
+.breadcrumb-link {
+    cursor: pointer;
+    color: var(--color-text-muted);
+}
+
+.breadcrumb-link:hover {
+    color: var(--color-primary);
+}
+
 .detail-field {
     display: flex;
     justify-content: space-between;
@@ -675,6 +691,14 @@ body {
     font-size: var(--font-size-md);
     color: var(--color-text-secondary);
     cursor: pointer;
+    min-width: 0;
+}
+
+.attachment-item .attachment-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
 }
 
 .attachment-item:hover {
@@ -685,6 +709,8 @@ body {
     margin-left: auto;
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 /* ── Empty states ───────────────────────────────────── */
@@ -1172,6 +1198,51 @@ body {
     border-radius: 12px;
     padding: 2rem 3rem;
     background: var(--color-surface);
+}
+
+/* ── About dialog ──────────────────────────────────── */
+
+.about-dialog {
+    max-width: 400px;
+}
+
+.about-info {
+    text-align: center;
+    padding: 1.5rem 0 0.5rem;
+}
+
+.about-version {
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-text-bright);
+    margin-bottom: 0.5rem;
+}
+
+.about-desc {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-dim);
+    margin-bottom: 0.75rem;
+    line-height: 1.4;
+}
+
+.about-links {
+    margin-bottom: 0.5rem;
+}
+
+.about-links a,
+.about-copyright a {
+    color: var(--color-primary);
+    text-decoration: none;
+}
+
+.about-links a:hover,
+.about-copyright a:hover {
+    text-decoration: underline;
+}
+
+.about-copyright {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
 }
 
 /* ── Utility ────────────────────────────────────────── */

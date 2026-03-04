@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount, WebSocketRoute
 from starlette.staticfiles import StaticFiles
@@ -20,9 +23,11 @@ from mail_hunter.routes.api import (
     get_mail_attachment,
     add_tag,
     remove_tag,
+    get_version,
 )
 from mail_hunter.routes.import_mail import import_upload, import_resolve
 from mail_hunter.routes.sync import sync_endpoint, stop_sync, test_server_connection
+from mail_hunter.services.imap import sync_server
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -32,8 +37,28 @@ async def homepage(request):
     return HTMLResponse(index.read_text())
 
 
+logger = logging.getLogger(__name__)
+
+
 async def on_startup():
-    await get_db()
+    db = await get_db()
+
+    # Resume any syncs that were in progress when the server last stopped
+    rows = await db.execute_fetchall(
+        "SELECT id, name, host, port, username, password, use_ssl, protocol "
+        "FROM servers WHERE syncing = 1"
+    )
+    for r in rows:
+        server = dict(r)
+        if server["protocol"] == "import":
+            # Can't sync import-only servers, clear the flag
+            await db.execute(
+                "UPDATE servers SET syncing = 0 WHERE id = ?", (server["id"],)
+            )
+            await db.commit()
+            continue
+        logger.info("Resuming sync for server %s (id=%d)", server["name"], server["id"])
+        asyncio.create_task(sync_server(server["id"], server))
 
 
 async def on_shutdown():
@@ -68,6 +93,8 @@ routes = [
     ),
     Route("/api/mails/{mail_id:int}/tags", add_tag, methods=["POST"]),
     Route("/api/mails/{mail_id:int}/tags/{tag:str}", remove_tag, methods=["DELETE"]),
+    # Version
+    Route("/api/version", get_version, methods=["GET"]),
     # Import
     Route("/api/import", import_upload, methods=["POST"]),
     Route("/api/import/resolve", import_resolve, methods=["POST"]),

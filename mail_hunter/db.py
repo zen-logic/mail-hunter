@@ -108,6 +108,11 @@ MIGRATIONS = [
         "sync_enabled",
         "ALTER TABLE servers ADD COLUMN sync_enabled INTEGER NOT NULL DEFAULT 1",
     ),
+    (
+        "servers",
+        "syncing",
+        "ALTER TABLE servers ADD COLUMN syncing INTEGER NOT NULL DEFAULT 0",
+    ),
     # drop unused columns
     ("mails", "body_preview", "ALTER TABLE mails DROP COLUMN body_preview"),
     # attachments columns

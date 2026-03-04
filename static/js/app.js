@@ -291,12 +291,16 @@ function handleWSMessage(msg) {
             if (msg.server_id === selectedServerId) renderServerDetail();
             break;
         case 'sync_progress': {
-            const detail = msg.total
-                ? `${msg.folder} — ${msg.count} of ${msg.total}`
-                : `${msg.folder}...`;
-            renderSyncStatus(`Syncing: ${detail}`);
+            let statusText = `Syncing: ${msg.folder}`;
+            let logDetail = statusText;
+            if (msg.total) {
+                const existing = msg.existing_count || 0;
+                statusText += ` — ${msg.count} of ${msg.total} [new] ${existing} [existing]`;
+                logDetail = `Sync: ${msg.folder} — ${msg.count} of ${msg.total} new`;
+            }
+            renderSyncStatus(statusText);
             if (msg.count && (msg.count === 1 || msg.count % 50 === 0 || msg.count === msg.total)) {
-                ActivityLog.add(`Sync: ${detail}`);
+                ActivityLog.add(logDetail);
             }
             if (msg.folder_count != null) {
                 const folderEl = document.querySelector(`.folder-item[data-server="${msg.server_id}"][data-folder="${CSS.escape(msg.folder)}"]`);
@@ -1003,27 +1007,64 @@ function toggleCollapse(key) {
 }
 
 function buildFolderTree(folders) {
-    // Build a tree from flat folder names like "Legacy/2015"
+    // Sort by name so parents come before children
+    const sorted = [...folders].sort((a, b) => a.name.localeCompare(b.name));
     const root = [];
     const map = {};
-    for (const f of folders) {
-        const parts = f.name.split('/');
-        let parent = root;
-        let path = '';
-        for (let i = 0; i < parts.length; i++) {
-            path = path ? path + '/' + parts[i] : parts[i];
-            if (!map[path]) {
-                const node = { name: parts[i], fullName: path, children: [], count: 0 };
-                map[path] = node;
-                parent.push(node);
+
+    function findOrCreateParent(fullName) {
+        // Find longest existing prefix separated by '/' or '.'
+        let bestKey = null;
+        let bestLen = 0;
+        for (const key of Object.keys(map)) {
+            const sep = fullName[key.length];
+            if (fullName.startsWith(key) && (sep === '/' || sep === '.') && key.length > bestLen) {
+                bestKey = key;
+                bestLen = key.length;
             }
-            if (i === parts.length - 1) {
-                map[path].count = f.count ?? 0;
-                map[path].isLeaf = true;
-            }
-            parent = map[path].children;
         }
+        if (bestKey) return { parent: map[bestKey], prefixLen: bestLen };
+
+        // No existing parent — check if there's an implicit one (e.g. "[Google Mail]" from "[Google Mail]/All Mail")
+        for (const sep of ['/', '.']) {
+            const idx = fullName.indexOf(sep);
+            if (idx > 0) {
+                const prefix = fullName.slice(0, idx);
+                if (!map[prefix]) {
+                    const virtual = { name: prefix, fullName: prefix, children: [], count: 0 };
+                    map[prefix] = virtual;
+                    root.push(virtual);
+                }
+                return { parent: map[prefix], prefixLen: idx };
+            }
+        }
+        return null;
     }
+
+    for (const f of sorted) {
+        const node = { name: f.name, fullName: f.name, children: [], count: f.count ?? 0 };
+        const result = findOrCreateParent(f.name);
+
+        if (result) {
+            node.name = f.name.slice(result.prefixLen + 1);
+            result.parent.children.push(node);
+        } else {
+            root.push(node);
+        }
+        map[f.name] = node;
+    }
+
+    // Roll up child counts into parents
+    function sumCounts(nodes) {
+        let total = 0;
+        for (const node of nodes) {
+            const childTotal = sumCounts(node.children);
+            node.count += childTotal;
+            total += node.count;
+        }
+        return total;
+    }
+    sumCounts(root);
     return root;
 }
 
@@ -1038,6 +1079,8 @@ function renderFolderTree(nodes, serverId, collapsed, depth) {
         let chevron = '';
         if (hasChildren) {
             chevron = `<span class="folder-toggle" data-toggle-key="${esc(key)}">${isCollapsed ? '&#x25B8;' : '&#x25BE;'}</span>`;
+        } else {
+            chevron = '<span class="folder-toggle">&nbsp;</span>';
         }
         html += `<div class="folder-item${fsel}" data-server="${serverId}" data-folder="${esc(node.fullName)}" style="padding-left:${indent}rem">
             ${chevron}<span>${esc(node.name)}</span>
@@ -1202,7 +1245,8 @@ async function renderServerDetail() {
     // Sync (incremental)
     document.getElementById('btn-sync-server')?.addEventListener('click', async () => {
         try {
-            const resp = await fetch(`/api/servers/${server.id}/sync`, { method: 'POST' });
+            const folderParam = selectedFolder ? `?folder=${encodeURIComponent(selectedFolder)}` : '';
+            const resp = await fetch(`/api/servers/${server.id}/sync${folderParam}`, { method: 'POST' });
             if (resp.ok) {
                 renderServerDetail();
             } else {
@@ -1461,6 +1505,21 @@ function renderDetail(mail) {
     container.innerHTML = `
         <div class="detail-section">
             <div class="detail-subject">${esc(mail.subject || '(no subject)')}</div>
+            <div class="detail-location">${(() => {
+                const crumbs = [];
+                if (mail.server_name) {
+                    crumbs.push(`<a class="breadcrumb-link" data-bc-server="${mail.server_id}">${esc(mail.server_name)}</a>`);
+                }
+                if (mail.folder_name) {
+                    const sep = mail.folder_name.includes('/') ? '/' : '.';
+                    const segments = mail.folder_name.split(sep);
+                    for (let i = 0; i < segments.length; i++) {
+                        const path = segments.slice(0, i + 1).join(sep);
+                        crumbs.push(`<a class="breadcrumb-link" data-bc-folder="${esc(path)}" data-bc-server="${mail.server_id}">${esc(segments[i])}</a>`);
+                    }
+                }
+                return crumbs.join(' / ');
+            })()}</div>
         </div>
         <div class="detail-section">
             <h3>Headers</h3>
@@ -1474,7 +1533,7 @@ function renderDetail(mail) {
             <h3>Attachments</h3>
             <div class="attachment-list">
                 ${mail.attachments.map((a, i) => `<div class="attachment-item">
-                    <button class="btn btn-sm" data-att-idx="${i}">${esc(a.filename)}</button>
+                    <button class="btn btn-sm attachment-name" data-att-idx="${i}">${esc(a.filename)}</button>
                     <span class="attachment-size">${formatSize(a.size)}</span>
                 </div>`).join('')}
             </div>
@@ -1495,6 +1554,20 @@ function renderDetail(mail) {
             </div>
         </div>
     `;
+
+    // Breadcrumb navigation
+    container.querySelectorAll('.breadcrumb-link').forEach(el => {
+        el.addEventListener('click', () => {
+            const serverId = parseInt(el.dataset.bcServer);
+            if (el.dataset.bcFolder) {
+                selectedServerId = serverId;
+                selectFolder(el.dataset.bcFolder);
+                renderServers(allServers);
+            } else {
+                selectServer(serverId);
+            }
+        });
+    });
 
     // View message
     document.getElementById('btn-view-message')?.addEventListener('click', async () => {
@@ -1575,6 +1648,40 @@ function renderDetail(mail) {
         });
     });
 }
+
+// ── About dialog ────────────────────────────────────────
+
+const aboutModal = document.getElementById('about-modal');
+const aboutContent = document.getElementById('about-content');
+
+async function openAbout() {
+    let version = '\u2026';
+    try {
+        const res = await fetch('/api/version');
+        if (res.ok) {
+            const data = await res.json();
+            version = data.version;
+        }
+    } catch (_) { /* ignore */ }
+
+    aboutContent.innerHTML = `
+        <div class="about-info">
+            <div class="about-version">Mail Hunter v${esc(version)}</div>
+            <p class="about-desc">Email archiving and search tool for managing IMAP mailboxes and local mail archives.</p>
+            <p class="about-links">
+                <a href="https://github.com/zen-logic/mail-hunter" target="_blank" rel="noopener">GitHub</a>
+            </p>
+            <p class="about-copyright">&copy; 2026 <a href="https://zenlogic.co.uk" target="_blank" rel="noopener">Zen Logic Ltd.</a></p>
+        </div>
+    `;
+    aboutModal.classList.remove('hidden');
+}
+
+document.querySelector('#toolbar h1').addEventListener('click', () => openAbout());
+document.getElementById('about-close').addEventListener('click', () => aboutModal.classList.add('hidden'));
+aboutModal.addEventListener('click', (e) => {
+    if (e.target === aboutModal) aboutModal.classList.add('hidden');
+});
 
 // ── Init ────────────────────────────────────────────────
 

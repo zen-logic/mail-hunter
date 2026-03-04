@@ -4,15 +4,23 @@ from pathlib import Path
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+from mail_hunter import __version__
 from mail_hunter.db import get_db, request_write_lock
 from mail_hunter.services.parser import _extract_body, _extract_body_html
 from mail_hunter.services.store import extract_attachment_from_path
 
 SORT_COLUMNS = {
-    "from": "from_name",
+    "from": "COALESCE(NULLIF(from_name,''),from_addr)",
     "subject": "subject",
     "date": "date",
     "size": "size",
+}
+# For queries using table alias "m."
+SORT_COLUMNS_M = {
+    "from": "COALESCE(NULLIF(m.from_name,''),m.from_addr)",
+    "subject": "m.subject",
+    "date": "m.date",
+    "size": "m.size",
 }
 PAGE_SIZE = 100
 
@@ -21,12 +29,13 @@ def _sort_params(request):
     """Extract validated sort/page params from query string."""
     sort_key = request.query_params.get("sort", "date")
     sort_col = SORT_COLUMNS.get(sort_key, "date")
+    sort_col_m = SORT_COLUMNS_M.get(sort_key, "m.date")
     sort_dir = "ASC" if request.query_params.get("sortDir") == "asc" else "DESC"
     try:
         page = max(0, int(request.query_params.get("page", 0)))
     except (ValueError, TypeError):
         page = 0
-    return sort_col, sort_dir, page
+    return sort_col, sort_col_m, sort_dir, page
 
 
 async def list_servers(request: Request):
@@ -175,7 +184,7 @@ async def search_mails(request: Request):
         params.append(date_to + "T23:59:59")
 
     where = " AND ".join(conditions)
-    sort_col, sort_dir, page = _sort_params(request)
+    sort_col, _sort_col_m, sort_dir, page = _sort_params(request)
 
     db = await get_db()
     count_row = await db.execute_fetchall(
@@ -198,7 +207,7 @@ async def search_mails(request: Request):
 async def list_mails(request: Request):
     server_id = request.path_params["server_id"]
     folder = request.query_params.get("folder")
-    sort_col, sort_dir, page = _sort_params(request)
+    sort_col, sort_col_m, sort_dir, page = _sort_params(request)
     db = await get_db()
 
     if folder:
@@ -214,7 +223,7 @@ async def list_mails(request: Request):
             "SELECT m.id, m.subject, m.from_name, m.from_addr, m.date, m.size, "
             "m.unread, m.attachment_count "
             "FROM mails m JOIN folders f ON m.folder_id = f.id "
-            f"WHERE {where} ORDER BY m.{sort_col} {sort_dir} "
+            f"WHERE {where} ORDER BY {sort_col_m} {sort_dir} "
             f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
             params,
         )
@@ -242,8 +251,9 @@ async def get_mail(request: Request):
     db = await get_db()
 
     row = await db.execute_fetchall(
-        "SELECT m.*, f.name AS folder_name FROM mails m "
-        "LEFT JOIN folders f ON m.folder_id = f.id WHERE m.id = ?",
+        "SELECT m.*, f.name AS folder_name, s.name AS server_name FROM mails m "
+        "LEFT JOIN folders f ON m.folder_id = f.id "
+        "LEFT JOIN servers s ON m.server_id = s.id WHERE m.id = ?",
         (mail_id,),
     )
     if not row:
@@ -406,3 +416,7 @@ async def get_mail_preview(request: Request):
     raw_source = raw_bytes.decode("utf-8", errors="replace")
 
     return JSONResponse({"body_text": body_text, "body_html": body_html, "raw_source": raw_source})
+
+
+async def get_version(request: Request):
+    return JSONResponse({"version": __version__})

@@ -147,7 +147,7 @@ async def test_connection(
         return {"ok": False, "error": str(e)}
 
 
-async def sync_server(server_id: int, server: dict, *, full: bool = False):
+async def sync_server(server_id: int, server: dict, *, full: bool = False, start_folder: str | None = None):
     """Full incremental sync for a server. Runs as background task."""
     if server_id in _active_syncs:
         await broadcast(
@@ -163,6 +163,12 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
     _cancel_requested.discard(server_id)
 
     db = await open_connection()
+
+    # Mark server as syncing so we can resume after restart
+    await db.execute(
+        "UPDATE servers SET syncing = 1 WHERE id = ?", (server_id,)
+    )
+    await db.commit()
 
     if full:
         await db.execute(
@@ -203,6 +209,11 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
                 }
             )
             return
+
+        # Reorder so start_folder is synced first
+        if start_folder and start_folder in folders:
+            folders.remove(start_folder)
+            folders.insert(0, start_folder)
 
         # Create all folders upfront so the tree updates immediately
         for folder_name in folders:
@@ -245,6 +256,11 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
             saved_uid_validity = row[0]["uid_validity"] if row else None
             saved_last_uid = row[0]["last_uid"] if row else 0
 
+            logger.info(
+                "Sync %s/%s: last_uid=%d",
+                server["name"], folder_name, saved_last_uid,
+            )
+
             uid_validity, new_uids = await asyncio.to_thread(
                 _fetch_uids_since, conn, folder_name, saved_last_uid
             )
@@ -268,8 +284,14 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
                 )
 
             if not new_uids:
+                logger.info("Sync %s/%s: up to date", server["name"], folder_name)
                 await _save_sync_state(db, server_id, folder_name, uid_validity, saved_last_uid)
                 continue
+
+            logger.info(
+                "Sync %s/%s: %d new UIDs (from %d)",
+                server["name"], folder_name, len(new_uids), new_uids[0],
+            )
 
             folder_id = await _ensure_folder(db, server_id, folder_name)
             max_uid = saved_last_uid
@@ -278,7 +300,8 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
                 "SELECT COUNT(*) as cnt FROM mails WHERE folder_id = ?",
                 (folder_id,),
             )
-            folder_count = count_row[0]["cnt"] if count_row else 0
+            existing_count = count_row[0]["cnt"] if count_row else 0
+            folder_count = existing_count
 
             await broadcast(
                 {
@@ -287,6 +310,7 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
                     "folder": folder_name,
                     "count": 0,
                     "total": len(new_uids),
+                    "existing_count": existing_count,
                 }
             )
 
@@ -341,6 +365,7 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
                         "folder": folder_name,
                         "count": i + 1,
                         "total": len(new_uids),
+                        "existing_count": existing_count,
                         "folder_count": folder_count,
                     }
                     if mail_data:
@@ -394,6 +419,14 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
                 await asyncio.to_thread(conn.logout)
             except Exception:
                 pass
+        # Clear syncing flag
+        try:
+            await db.execute(
+                "UPDATE servers SET syncing = 0 WHERE id = ?", (server_id,)
+            )
+            await db.commit()
+        except Exception:
+            pass
         await db.close()
         _active_syncs.discard(server_id)
         _cancel_requested.discard(server_id)
