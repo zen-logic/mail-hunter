@@ -274,6 +274,18 @@ body {
 
 #status-activity {
     flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.status-sync-text {
+    color: var(--color-status-warn);
+}
+
+.status-cancel-btn {
+    font-size: var(--font-size-xs);
+    padding: 0.1rem 0.3rem;
 }
 
 #status-connection {
@@ -376,6 +388,15 @@ body {
     white-space: nowrap;
 }
 
+.sync-badge {
+    font-size: var(--font-size-xs);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    background: var(--color-status-warn);
+    color: #000;
+    white-space: nowrap;
+}
+
 .server-badge {
     font-size: var(--font-size-xs);
     padding: 0.1rem 0.35rem;
@@ -422,6 +443,7 @@ body {
 .mail-table {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
 }
 
 .mail-table th {
@@ -470,30 +492,32 @@ body {
 }
 
 .mail-table .col-from {
-    width: 20%;
-    max-width: 180px;
+    width: 150px;
 }
 
 .mail-table .col-subject {
-    width: 50%;
+    /* takes remaining space */
 }
 
 .mail-table .col-date {
-    width: 15%;
-    max-width: 140px;
+    width: 175px;
 }
 
 .mail-table .col-size {
-    width: 8%;
-    max-width: 80px;
+    width: 80px;
     text-align: right;
 }
 
 .mail-table .col-attachments {
-    width: 7%;
-    max-width: 60px;
+    width: 40px;
     text-align: center;
 }
+
+.sort-indicator { display: inline-flex; align-items: center; margin-left: 0.25rem; vertical-align: middle; }
+
+.paging-bar { display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.35rem 0.75rem; border-top: 1px solid var(--color-border); background: var(--color-surface-raised); flex-shrink: 0; }
+.paging-info { font-size: var(--font-size-sm); color: var(--color-text); font-weight: var(--font-weight-semibold); }
+.paging-total { font-size: var(--font-size-sm); color: var(--color-text-muted); margin-left: 0.25rem; }
 
 /* ── Detail panel ───────────────────────────────────── */
 

@@ -14,11 +14,10 @@ function formatDate(iso) {
     if (!iso) return '';
     const d = new Date(iso);
     if (isNaN(d)) return iso;
-    const now = new Date();
-    if (d.toDateString() === now.toDateString()) {
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return d.toLocaleString([], {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+    });
 }
 
 function formatSize(bytes) {
@@ -30,29 +29,31 @@ function formatSize(bytes) {
 
 // ── Confirm dialog ─────────────────────────────────────
 
-function showConfirm(message, { title = 'Confirm', okLabel = 'Delete', okClass = 'btn-danger' } = {}) {
+function showConfirm(message, { title = 'Confirm', okLabel = 'Delete', okClass = 'btn-danger', cancelLabel = 'Cancel' } = {}) {
     return new Promise((resolve) => {
         const modal = document.getElementById('confirm-modal');
         document.getElementById('confirm-title').textContent = title;
         document.getElementById('confirm-message').textContent = message;
         const okBtn = document.getElementById('confirm-ok');
+        const cancelBtn = document.getElementById('confirm-cancel');
         okBtn.textContent = okLabel;
         okBtn.className = `btn btn-sm ${okClass}`;
+        cancelBtn.textContent = cancelLabel;
         modal.classList.remove('hidden');
 
         function cleanup(result) {
             modal.classList.add('hidden');
             okBtn.removeEventListener('click', onOk);
-            document.getElementById('confirm-cancel').removeEventListener('click', onCancel);
+            cancelBtn.removeEventListener('click', onCancel);
             modal.removeEventListener('click', onBackdrop);
             resolve(result);
         }
         function onOk() { cleanup(true); }
         function onCancel() { cleanup(false); }
-        function onBackdrop(e) { if (e.target === modal) cleanup(false); }
+        function onBackdrop(e) { if (e.target === modal) cleanup(null); }
 
         okBtn.addEventListener('click', onOk);
-        document.getElementById('confirm-cancel').addEventListener('click', onCancel);
+        cancelBtn.addEventListener('click', onCancel);
         modal.addEventListener('click', onBackdrop);
     });
 }
@@ -208,6 +209,63 @@ function handleWSMessage(msg) {
         case 'import_error':
             ActivityLog.add(`Import error: ${msg.error}`);
             break;
+        case 'sync_started':
+            ActivityLog.add(`Sync started: ${msg.server_name || 'server'}`);
+            syncingServerId = msg.server_id;
+            renderSyncStatus(`Syncing ${msg.server_name || 'server'}...`);
+            loadServers();
+            if (msg.server_id === selectedServerId) {
+                currentPage = 0;
+                if (fullSyncServerId !== msg.server_id) loadMails();
+                renderServerDetail();
+            }
+            break;
+        case 'sync_progress': {
+            const detail = msg.total
+                ? `${msg.folder} — ${msg.count} of ${msg.total}`
+                : `${msg.folder}...`;
+            renderSyncStatus(`Syncing: ${detail}`);
+            if (msg.count && (msg.count === 1 || msg.count % 50 === 0 || msg.count === msg.total)) {
+                ActivityLog.add(`Sync: ${detail}`);
+            }
+            if (msg.folder_count != null) {
+                const folderEl = document.querySelector(`.folder-item[data-server="${msg.server_id}"][data-folder="${CSS.escape(msg.folder)}"]`);
+                if (folderEl) {
+                    const countSpan = folderEl.querySelector('.folder-count');
+                    if (countSpan) countSpan.textContent = msg.folder_count;
+                }
+            }
+            break;
+        }
+        case 'sync_completed':
+            ActivityLog.add(`Sync complete: ${msg.imported} imported, ${msg.skipped} skipped${msg.errors ? ', ' + msg.errors + ' errors' : ''}`);
+            syncingServerId = null;
+            if (fullSyncServerId === msg.server_id) fullSyncServerId = null;
+            renderSyncStatus(null);
+            loadServers();
+            if (msg.server_id === selectedServerId) {
+                loadMails();
+                renderServerDetail();
+            }
+            break;
+        case 'sync_cancelled':
+            ActivityLog.add(`Sync cancelled (${msg.imported} imported before cancel)`);
+            syncingServerId = null;
+            if (fullSyncServerId === msg.server_id) fullSyncServerId = null;
+            renderSyncStatus(null);
+            loadServers();
+            if (msg.server_id === selectedServerId) {
+                loadMails();
+                renderServerDetail();
+            }
+            break;
+        case 'sync_error':
+            ActivityLog.add(`Sync error: ${msg.error}`);
+            syncingServerId = null;
+            renderSyncStatus(null);
+            renderServers(allServers);
+            if (msg.server_id === selectedServerId) renderServerDetail();
+            break;
         default:
             if (msg.message) ActivityLog.add(msg.message);
             break;
@@ -215,6 +273,32 @@ function handleWSMessage(msg) {
 }
 
 connectWS();
+
+// ── Sync status ─────────────────────────────────────────
+
+let syncingServerId = null;
+let fullSyncServerId = null;
+const statusActivity = document.getElementById('status-activity');
+
+function renderSyncStatus(detail) {
+    if (!detail) {
+        statusActivity.innerHTML = '';
+        return;
+    }
+    statusActivity.innerHTML = `
+        <span class="status-sync-text">${esc(detail)}</span>
+        <button class="btn btn-sm status-cancel-btn" id="status-cancel-sync">Cancel</button>
+    `;
+    document.getElementById('status-cancel-sync')?.addEventListener('click', async () => {
+        if (syncingServerId) {
+            try {
+                await fetch(`/api/servers/${syncingServerId}/sync/cancel`, { method: 'POST' });
+            } catch (err) {
+                console.error('Cancel failed:', err);
+            }
+        }
+    });
+}
 
 // ── Server filter ───────────────────────────────────────
 
@@ -267,34 +351,40 @@ function hasSearchParams() {
 }
 
 document.getElementById('search-go').addEventListener('click', () => {
-    if (hasSearchParams()) doSearch();
+    if (hasSearchParams()) { currentPage = 0; doSearch(); }
 });
 
 document.getElementById('search-clear').addEventListener('click', () => {
     searchFields.forEach(id => document.getElementById(id).value = '');
     document.getElementById('mail-filter').value = '';
+    currentPage = 0;
     if (selectedServerId) loadMails();
 });
 
 // Enter in any search field triggers search
 searchFields.forEach(id => {
     document.getElementById(id).addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && hasSearchParams()) doSearch();
+        if (e.key === 'Enter' && hasSearchParams()) { currentPage = 0; doSearch(); }
     });
 });
 
 async function doSearch() {
     const params = getSearchParams();
+    params.sort = sortKey;
+    params.sortDir = sortDirParam();
+    params.page = currentPage;
     const countEl = document.getElementById('mail-count');
     const titleEl = document.getElementById('mail-panel-title');
     try {
         const qs = new URLSearchParams(params).toString();
         const resp = await fetch(`/api/mails/search?${qs}`);
         if (!resp.ok) return;
-        const mails = await resp.json();
+        const data = await resp.json();
         titleEl.textContent = 'Search Results';
-        countEl.textContent = `(${mails.length})`;
-        currentMails = mails;
+        totalMails = data.total;
+        currentPage = data.page;
+        countEl.textContent = data.total ? `(${data.total})` : '';
+        currentMails = data.items;
         applyFilterAndRender();
     } catch (err) {
         console.error('Search failed:', err);
@@ -305,6 +395,28 @@ async function doSearch() {
 
 const mailFilter = document.getElementById('mail-filter');
 let currentMails = [];
+let sortKey = 'date';
+let sortDir = -1; // 1=asc, -1=desc
+let currentPage = 0;
+let totalMails = 0;
+const PAGE_SIZE = 100;
+
+function sortDirParam() { return sortDir === 1 ? 'asc' : 'desc'; }
+
+function toggleSort(key) {
+    if (sortKey === key) {
+        sortDir = -sortDir;
+    } else {
+        sortKey = key;
+        sortDir = 1;
+    }
+    currentPage = 0;
+    if (hasSearchParams()) {
+        doSearch();
+    } else {
+        loadMails();
+    }
+}
 
 mailFilter.addEventListener('input', () => applyFilterAndRender());
 
@@ -329,7 +441,7 @@ function applyFilterAndRender() {
     renderMails(filtered);
     const countEl = document.getElementById('mail-count');
     if (filtered.length !== currentMails.length) {
-        countEl.textContent = `(${filtered.length} of ${currentMails.length})`;
+        countEl.textContent = `(${filtered.length} of ${totalMails})`;
     }
 }
 
@@ -826,8 +938,10 @@ function renderServers(servers) {
     let html = '';
     for (const s of filtered) {
         const sel = s.id === selectedServerId ? ' selected' : '';
+        const syncBadge = s.id === syncingServerId ? '<span class="sync-badge">syncing</span>' : '';
         html += `<div class="server-item${sel}" data-id="${s.id}">
             <span class="server-label">${esc(s.name)}</span>
+            ${syncBadge}
         </div>`;
         if (s.folders) {
             for (const f of s.folders) {
@@ -857,7 +971,11 @@ function clearSelection() {
     selectedFolder = null;
     selectedMailId = null;
     currentMails = [];
+    totalMails = 0;
+    currentPage = 0;
     document.getElementById('mail-content').innerHTML = '<div class="empty-state"><span>Select a server or folder</span></div>';
+    const pagingBar = document.getElementById('mail-panel').querySelector('.paging-bar');
+    if (pagingBar) pagingBar.remove();
     document.getElementById('mail-count').textContent = '';
     document.getElementById('mail-panel-title').textContent = 'Messages';
     document.getElementById('mail-filter').value = '';
@@ -868,6 +986,7 @@ function selectServer(id) {
     selectedServerId = id;
     selectedFolder = null;
     selectedMailId = null;
+    currentPage = 0;
     loadServers();
     loadMails();
     renderServerDetail();
@@ -876,11 +995,12 @@ function selectServer(id) {
 function selectFolder(name) {
     selectedFolder = name;
     selectedMailId = null;
+    currentPage = 0;
     loadMails();
     renderServerDetail();
 }
 
-function renderServerDetail() {
+async function renderServerDetail() {
     const container = document.getElementById('detail-content');
     const server = allServers.find(s => s.id === selectedServerId);
     if (!server) {
@@ -890,6 +1010,19 @@ function renderServerDetail() {
 
     const totalMails = (server.folders || []).reduce((sum, f) => sum + (f.count || 0), 0);
     const folderCount = (server.folders || []).length;
+    const isImportOnly = !server.host;
+
+    // Check sync status for non-import servers
+    let syncing = false;
+    if (!isImportOnly) {
+        try {
+            const resp = await fetch(`/api/servers/${server.id}/sync`);
+            if (resp.ok) {
+                const status = await resp.json();
+                syncing = status.syncing;
+            }
+        } catch (err) { /* ignore */ }
+    }
 
     container.innerHTML = `
         <div class="detail-section">
@@ -899,6 +1032,7 @@ function renderServerDetail() {
             <h3>Server Info</h3>
             ${server.host ? `<div class="detail-field"><span class="label">Host</span><span class="value">${esc(server.host)}:${server.port}</span></div>` : ''}
             <div class="detail-field"><span class="label">User</span><span class="value">${esc(server.username)}</span></div>
+            ${server.last_sync ? `<div class="detail-field"><span class="label">Last Sync</span><span class="value">${formatDate(server.last_sync)}</span></div>` : ''}
         </div>
         <div class="detail-section">
             <h3>Contents</h3>
@@ -907,11 +1041,105 @@ function renderServerDetail() {
         </div>
         <div class="detail-section">
             <div class="detail-btn-group">
+                ${!isImportOnly && !syncing ? `<button class="btn" id="btn-sync-server">Sync</button>` : ''}
+                ${!isImportOnly && !syncing && server.last_sync ? `<button class="btn" id="btn-full-sync">Full Sync</button>` : ''}
+                ${!isImportOnly && !syncing && server.last_sync ? `<button class="btn" id="btn-purge-sync">Delete &amp; Re-sync</button>` : ''}
+                ${!isImportOnly && syncing ? `<button class="btn" id="btn-cancel-sync">Cancel Sync</button>` : ''}
+                ${!isImportOnly ? `<button class="btn" id="btn-test-connection">Test Connection</button>` : ''}
                 <button class="btn btn-danger" id="btn-delete-server">Delete Server</button>
             </div>
         </div>
     `;
 
+    // Sync (incremental)
+    document.getElementById('btn-sync-server')?.addEventListener('click', async () => {
+        try {
+            const resp = await fetch(`/api/servers/${server.id}/sync`, { method: 'POST' });
+            if (resp.ok) {
+                renderServerDetail();
+            } else {
+                const err = await resp.json();
+                ActivityLog.add(`Sync failed: ${err.error || 'unknown error'}`);
+            }
+        } catch (err) {
+            ActivityLog.add(`Sync failed: ${err.message}`);
+        }
+    });
+
+    // Full sync (reset sync state, re-walk UIDs, skip existing)
+    document.getElementById('btn-full-sync')?.addEventListener('click', async () => {
+        try {
+            const resp = await fetch(`/api/servers/${server.id}/sync?full=1`, { method: 'POST' });
+            if (resp.ok) {
+                renderServerDetail();
+            } else {
+                const err = await resp.json();
+                ActivityLog.add(`Sync failed: ${err.error || 'unknown error'}`);
+            }
+        } catch (err) {
+            ActivityLog.add(`Sync failed: ${err.message}`);
+        }
+    });
+
+    // Delete & re-sync (purge all mails, reset sync state, re-download)
+    document.getElementById('btn-purge-sync')?.addEventListener('click', async () => {
+        if (!await showConfirm(
+            `Delete all messages for "${server.name}" and re-download from server?`,
+            { title: 'Delete & Re-sync', okLabel: 'Delete & Re-sync', okClass: 'btn-danger' }
+        )) return;
+        if (server.id === selectedServerId) {
+            fullSyncServerId = server.id;
+            document.getElementById('mail-content').innerHTML = '<div class="empty-state"><span>Synchronising...</span></div>';
+            const pagingBar = document.getElementById('mail-panel').querySelector('.paging-bar');
+            if (pagingBar) pagingBar.remove();
+            document.getElementById('mail-count').textContent = '';
+        }
+        try {
+            const resp = await fetch(`/api/servers/${server.id}/sync?purge=1`, { method: 'POST' });
+            if (resp.ok) {
+                loadServers();
+                renderServerDetail();
+            } else {
+                const err = await resp.json();
+                ActivityLog.add(`Sync failed: ${err.error || 'unknown error'}`);
+                fullSyncServerId = null;
+            }
+        } catch (err) {
+            ActivityLog.add(`Sync failed: ${err.message}`);
+            fullSyncServerId = null;
+        }
+    });
+
+    // Cancel sync
+    document.getElementById('btn-cancel-sync')?.addEventListener('click', async () => {
+        try {
+            await fetch(`/api/servers/${server.id}/sync/cancel`, { method: 'POST' });
+        } catch (err) {
+            console.error('Cancel failed:', err);
+        }
+    });
+
+    // Test connection
+    document.getElementById('btn-test-connection')?.addEventListener('click', async () => {
+        const btn = document.getElementById('btn-test-connection');
+        btn.disabled = true;
+        btn.textContent = 'Testing...';
+        try {
+            const resp = await fetch(`/api/servers/${server.id}/test`, { method: 'POST' });
+            const result = await resp.json();
+            if (result.ok) {
+                ActivityLog.add(`Connection OK — ${result.folders.length} folders: ${result.folders.join(', ')}`);
+            } else {
+                ActivityLog.add(`Connection failed: ${result.error}`);
+            }
+        } catch (err) {
+            ActivityLog.add(`Connection test failed: ${err.message}`);
+        }
+        btn.disabled = false;
+        btn.textContent = 'Test Connection';
+    });
+
+    // Delete
     document.getElementById('btn-delete-server').addEventListener('click', async () => {
         if (!await showConfirm(`Delete server "${server.name}" and all its messages?`)) return;
         try {
@@ -936,32 +1164,86 @@ async function loadMails() {
     titleEl.textContent = 'Messages';
     mailFilter.value = '';
     try {
-        let url = `/api/servers/${selectedServerId}/mails`;
-        if (selectedFolder) url += `?folder=${encodeURIComponent(selectedFolder)}`;
-        const resp = await fetch(url);
+        const params = new URLSearchParams({
+            sort: sortKey,
+            sortDir: sortDirParam(),
+            page: currentPage,
+        });
+        if (selectedFolder) params.set('folder', selectedFolder);
+        const resp = await fetch(`/api/servers/${selectedServerId}/mails?${params}`);
         if (!resp.ok) return;
-        const mails = await resp.json();
-        countEl.textContent = mails.length ? `(${mails.length})` : '';
-        currentMails = mails;
-        renderMails(mails);
+        const data = await resp.json();
+        totalMails = data.total;
+        currentPage = data.page;
+        countEl.textContent = data.total ? `(${data.total})` : '';
+        currentMails = data.items;
+        renderMails(currentMails);
     } catch (err) {
         console.error('Failed to load mails:', err);
         container.innerHTML = '<div class="empty-state"><span>Failed to load messages</span></div>';
     }
 }
 
+function sortArrow(dir) {
+    if (dir === 1) {
+        return '<span class="sort-indicator"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M5 2L9 8H1Z" fill="currentColor"/></svg></span>';
+    }
+    return '<span class="sort-indicator"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M5 8L1 2H9Z" fill="currentColor"/></svg></span>';
+}
+
+function sortHeader(label, key, cls) {
+    const active = sortKey === key;
+    const activeClass = active ? ' sort-active' : '';
+    const arrow = active ? sortArrow(sortDir) : '';
+    return `<th class="${cls}${activeClass}" data-sort="${key}">${label}${arrow}</th>`;
+}
+
+function renderPagingBar() {
+    const container = document.getElementById('mail-panel');
+    const existing = container.querySelector('.paging-bar');
+    if (existing) existing.remove();
+
+    if (totalMails <= PAGE_SIZE) return;
+
+    const totalPages = Math.ceil(totalMails / PAGE_SIZE);
+    const pageNum = currentPage + 1;
+    const bar = document.createElement('div');
+    bar.className = 'paging-bar';
+    bar.innerHTML = `
+        <button class="btn btn-sm" id="page-prev"${currentPage === 0 ? ' disabled' : ''}>&#x2039;</button>
+        <span class="paging-info">Page ${pageNum} of ${totalPages}</span>
+        <span class="paging-total">(${totalMails} messages)</span>
+        <button class="btn btn-sm" id="page-next"${currentPage >= totalPages - 1 ? ' disabled' : ''}>&#x203A;</button>
+    `;
+    container.appendChild(bar);
+
+    document.getElementById('page-prev')?.addEventListener('click', () => {
+        if (currentPage > 0) {
+            currentPage--;
+            if (hasSearchParams()) doSearch(); else loadMails();
+        }
+    });
+    document.getElementById('page-next')?.addEventListener('click', () => {
+        if (currentPage < totalPages - 1) {
+            currentPage++;
+            if (hasSearchParams()) doSearch(); else loadMails();
+        }
+    });
+}
+
 function renderMails(mails) {
     const container = document.getElementById('mail-content');
-    if (!mails.length) {
+    if (!mails || !mails.length) {
         container.innerHTML = '<div class="empty-state"><span>No messages</span></div>';
+        renderPagingBar();
         return;
     }
 
     let html = `<table class="mail-table"><thead><tr>
-        <th class="col-from">From</th>
-        <th class="col-subject">Subject</th>
-        <th class="col-date">Date</th>
-        <th class="col-size">Size</th>
+        ${sortHeader('From', 'from', 'col-from')}
+        ${sortHeader('Subject', 'subject', 'col-subject')}
+        ${sortHeader('Date', 'date', 'col-date')}
+        ${sortHeader('Size', 'size', 'col-size')}
         <th class="col-attachments">Att.</th>
     </tr></thead><tbody>`;
 
@@ -980,9 +1262,14 @@ function renderMails(mails) {
     html += '</tbody></table>';
     container.innerHTML = html;
 
+    container.querySelectorAll('th[data-sort]').forEach(el => {
+        el.addEventListener('click', () => toggleSort(el.dataset.sort));
+    });
     container.querySelectorAll('tr[data-id]').forEach(el => {
         el.addEventListener('click', () => selectMail(parseInt(el.dataset.id)));
     });
+
+    renderPagingBar();
 }
 
 async function selectMail(id) {

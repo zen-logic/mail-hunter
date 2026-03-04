@@ -5,11 +5,31 @@ from starlette.responses import JSONResponse, Response
 from mail_hunter.db import get_db
 from mail_hunter.services.store import extract_attachment_from_path
 
+SORT_COLUMNS = {
+    "from": "from_name",
+    "subject": "subject",
+    "date": "date",
+    "size": "size",
+}
+PAGE_SIZE = 100
+
+
+def _sort_params(request):
+    """Extract validated sort/page params from query string."""
+    sort_key = request.query_params.get("sort", "date")
+    sort_col = SORT_COLUMNS.get(sort_key, "date")
+    sort_dir = "ASC" if request.query_params.get("sortDir") == "asc" else "DESC"
+    try:
+        page = max(0, int(request.query_params.get("page", 0)))
+    except (ValueError, TypeError):
+        page = 0
+    return sort_col, sort_dir, page
+
 
 async def list_servers(request: Request):
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT id, name, host, port, username FROM servers ORDER BY name"
+        "SELECT id, name, host, port, username, last_sync FROM servers ORDER BY name"
     )
     servers = []
     for r in rows:
@@ -26,6 +46,7 @@ async def list_servers(request: Request):
                 "host": r["host"],
                 "port": r["port"],
                 "username": r["username"],
+                "last_sync": r["last_sync"],
                 "folders": [{"name": f["name"], "count": f["count"]} for f in folders],
             }
         )
@@ -82,8 +103,24 @@ async def update_server(request: Request):
 async def delete_server(request: Request):
     server_id = request.path_params["server_id"]
     db = await get_db()
+
+    # Collect raw file paths before cascade delete removes the rows
+    rows = await db.execute_fetchall(
+        "SELECT raw_path FROM mails WHERE server_id = ? AND raw_path IS NOT NULL",
+        (server_id,),
+    )
+    raw_paths = [r["raw_path"] for r in rows]
+
     await db.execute("DELETE FROM servers WHERE id = ?", (server_id,))
     await db.commit()
+
+    # Remove archive files
+    for p in raw_paths:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except OSError:
+            pass
+
     return JSONResponse({"ok": True})
 
 
@@ -97,7 +134,7 @@ async def search_mails(request: Request):
     date_to = request.query_params.get("date_to", "").strip()
 
     if not any([from_q, to_q, subject_q, body_q, date_from, date_to]):
-        return JSONResponse([])
+        return JSONResponse({"items": [], "total": 0, "page": 0, "pageSize": PAGE_SIZE})
 
     conditions = []
     params = []
@@ -132,37 +169,66 @@ async def search_mails(request: Request):
         params.append(date_to + "T23:59:59")
 
     where = " AND ".join(conditions)
+    sort_col, sort_dir, page = _sort_params(request)
+
     db = await get_db()
+    count_row = await db.execute_fetchall(
+        f"SELECT COUNT(*) as cnt FROM mails WHERE {where}", params
+    )
+    total = count_row[0]["cnt"] if count_row else 0
+
     rows = await db.execute_fetchall(
         "SELECT id, subject, from_name, from_addr, date, size, unread, attachment_count "
-        f"FROM mails WHERE {where} ORDER BY date DESC LIMIT 500",
+        f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
+        f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
         params,
     )
 
-    return JSONResponse([dict(r) for r in rows])
+    return JSONResponse(
+        {"items": [dict(r) for r in rows], "total": total, "page": page, "pageSize": PAGE_SIZE}
+    )
 
 
 async def list_mails(request: Request):
     server_id = request.path_params["server_id"]
     folder = request.query_params.get("folder")
+    sort_col, sort_dir, page = _sort_params(request)
     db = await get_db()
 
     if folder:
+        where = "m.server_id = ? AND f.name = ?"
+        params = (server_id, folder)
+        count_row = await db.execute_fetchall(
+            "SELECT COUNT(*) as cnt FROM mails m JOIN folders f ON m.folder_id = f.id "
+            f"WHERE {where}",
+            params,
+        )
+        total = count_row[0]["cnt"] if count_row else 0
         rows = await db.execute_fetchall(
             "SELECT m.id, m.subject, m.from_name, m.from_addr, m.date, m.size, "
             "m.unread, m.attachment_count "
             "FROM mails m JOIN folders f ON m.folder_id = f.id "
-            "WHERE m.server_id = ? AND f.name = ? ORDER BY m.date DESC",
-            (server_id, folder),
+            f"WHERE {where} ORDER BY m.{sort_col} {sort_dir} "
+            f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
+            params,
         )
     else:
+        where = "server_id = ?"
+        params = (server_id,)
+        count_row = await db.execute_fetchall(
+            f"SELECT COUNT(*) as cnt FROM mails WHERE {where}", params
+        )
+        total = count_row[0]["cnt"] if count_row else 0
         rows = await db.execute_fetchall(
             "SELECT id, subject, from_name, from_addr, date, size, unread, attachment_count "
-            "FROM mails WHERE server_id = ? ORDER BY date DESC",
-            (server_id,),
+            f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
+            f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
+            params,
         )
 
-    return JSONResponse([dict(r) for r in rows])
+    return JSONResponse(
+        {"items": [dict(r) for r in rows], "total": total, "page": page, "pageSize": PAGE_SIZE}
+    )
 
 
 async def get_mail(request: Request):
@@ -225,14 +291,23 @@ async def delete_mail(request: Request):
     mail_id = request.path_params["mail_id"]
     db = await get_db()
     row = await db.execute_fetchall(
-        "SELECT legal_hold FROM mails WHERE id = ?", (mail_id,)
+        "SELECT legal_hold, raw_path FROM mails WHERE id = ?", (mail_id,)
     )
     if not row:
         return JSONResponse({"error": "not found"}, status_code=404)
     if row[0]["legal_hold"]:
         return JSONResponse({"error": "message is on legal hold"}, status_code=403)
+
+    raw_path = row[0]["raw_path"]
     await db.execute("DELETE FROM mails WHERE id = ?", (mail_id,))
     await db.commit()
+
+    if raw_path:
+        try:
+            Path(raw_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
     return JSONResponse({"ok": True})
 
 
