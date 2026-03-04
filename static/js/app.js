@@ -1653,6 +1653,317 @@ aboutModal.addEventListener('click', (e) => {
     if (e.target === aboutModal) aboutModal.classList.add('hidden');
 });
 
+// ── Keyboard navigation ─────────────────────────────────
+
+let activePanel = 'server';
+const panelOrder = ['server', 'mail', 'detail'];
+const panelElements = {
+    server: serverPanel,
+    mail: mailPanel,
+    detail: detailPanel,
+};
+
+function setActivePanel(name) {
+    activePanel = name;
+    for (const [key, el] of Object.entries(panelElements)) {
+        el.classList.toggle('panel-focused', key === name);
+    }
+}
+
+// Set active panel on click
+for (const [key, el] of Object.entries(panelElements)) {
+    el.addEventListener('mousedown', () => setActivePanel(key));
+}
+
+// ── Modal helpers ───────────────────────────────────────
+
+const modalIds = ['preview-modal', 'confirm-modal', 'settings-modal', 'import-modal', 'about-modal'];
+
+function getTopmostModal() {
+    for (const id of modalIds) {
+        const el = document.getElementById(id);
+        if (el && !el.classList.contains('hidden')) return el;
+    }
+    return null;
+}
+
+function closeModal(modal) {
+    if (!modal) return;
+    const id = modal.id;
+    if (id === 'preview-modal') {
+        document.getElementById('preview-close')?.click();
+    } else if (id === 'confirm-modal') {
+        document.getElementById('confirm-cancel')?.click();
+    } else if (id === 'settings-modal') {
+        closeSettings();
+    } else if (id === 'import-modal') {
+        closeImport();
+    } else if (id === 'about-modal') {
+        modal.classList.add('hidden');
+    }
+}
+
+// ── Server panel navigation ─────────────────────────────
+
+function getServerNavigableItems() {
+    return [...document.querySelectorAll('#server-content .server-item, #server-content .folder-item')];
+}
+
+function getSelectedServerItem() {
+    return document.querySelector('#server-content .server-item.selected, #server-content .folder-item.selected');
+}
+
+function handleServerKeys(e) {
+    const items = getServerNavigableItems();
+    if (!items.length) return;
+
+    const current = getSelectedServerItem();
+    const idx = current ? items.indexOf(current) : -1;
+
+    switch (e.key) {
+        case 'ArrowDown': {
+            e.preventDefault();
+            const next = idx < items.length - 1 ? idx + 1 : 0;
+            activateServerItem(items[next]);
+            break;
+        }
+        case 'ArrowUp': {
+            e.preventDefault();
+            const prev = idx > 0 ? idx - 1 : items.length - 1;
+            activateServerItem(items[prev]);
+            break;
+        }
+        case 'ArrowRight': {
+            e.preventDefault();
+            if (!current) break;
+            // Expand collapsed server
+            const toggleKey = current.querySelector('[data-toggle-key]');
+            if (toggleKey) {
+                const key = toggleKey.dataset.toggleKey;
+                const collapsed = getCollapsedNodes();
+                if (collapsed.has(key)) {
+                    toggleCollapse(key);
+                }
+            }
+            break;
+        }
+        case 'ArrowLeft': {
+            e.preventDefault();
+            if (!current) break;
+            if (current.classList.contains('folder-item')) {
+                // If folder has children and is expanded, collapse it
+                const serverId = current.dataset.server;
+                const folderName = current.dataset.folder;
+                const key = `s${serverId}:${folderName}`;
+                const collapsed = getCollapsedNodes();
+                if (!collapsed.has(key) && document.querySelector(`.folder-item[data-folder^="${CSS.escape(folderName)}"]`) !== current) {
+                    // Check if this folder actually has children by looking for a toggle
+                    const toggle = current.querySelector('[data-toggle-key]');
+                    if (toggle && !collapsed.has(toggle.dataset.toggleKey)) {
+                        toggleCollapse(toggle.dataset.toggleKey);
+                        break;
+                    }
+                }
+                // Jump to parent server
+                const serverItem = document.querySelector(`.server-item[data-id="${serverId}"]`);
+                if (serverItem) activateServerItem(serverItem);
+            } else if (current.classList.contains('server-item')) {
+                // Collapse expanded server
+                const serverKey = `srv:${current.dataset.id}`;
+                const collapsed = getCollapsedNodes();
+                if (!collapsed.has(serverKey)) {
+                    toggleCollapse(serverKey);
+                }
+            }
+            break;
+        }
+        case 'Enter': {
+            e.preventDefault();
+            if (!current) break;
+            if (current.classList.contains('server-item')) {
+                selectServer(parseInt(current.dataset.id));
+            } else if (current.classList.contains('folder-item')) {
+                const serverId = parseInt(current.dataset.server);
+                if (serverId !== selectedServerId) {
+                    selectedServerId = serverId;
+                    loadServers();
+                }
+                selectFolder(current.dataset.folder);
+            }
+            break;
+        }
+        case '/': {
+            e.preventDefault();
+            serverFilter.focus();
+            break;
+        }
+    }
+}
+
+function activateServerItem(el) {
+    if (!el) return;
+    // Remove existing selection
+    document.querySelectorAll('#server-content .server-item.selected, #server-content .folder-item.selected')
+        .forEach(s => s.classList.remove('selected'));
+    el.classList.add('selected');
+    el.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+}
+
+// ── Mail panel navigation ───────────────────────────────
+
+function getMailRows() {
+    return [...document.querySelectorAll('.mail-table tbody tr[data-id]')];
+}
+
+function handleMailKeys(e) {
+    const rows = getMailRows();
+
+    switch (e.key) {
+        case 'ArrowDown': {
+            e.preventDefault();
+            if (!rows.length) break;
+            const sel = document.querySelector('.mail-table tr.selected');
+            const idx = sel ? rows.indexOf(sel) : -1;
+            if (idx < rows.length - 1) {
+                const next = rows[idx + 1];
+                selectMail(parseInt(next.dataset.id));
+                next.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+            } else if (idx === rows.length - 1) {
+                // At bottom — try next page
+                const nextBtn = document.getElementById('page-next');
+                if (nextBtn && !nextBtn.disabled) nextBtn.click();
+            }
+            break;
+        }
+        case 'ArrowUp': {
+            e.preventDefault();
+            if (!rows.length) break;
+            const sel = document.querySelector('.mail-table tr.selected');
+            const idx = sel ? rows.indexOf(sel) : -1;
+            if (idx > 0) {
+                const prev = rows[idx - 1];
+                selectMail(parseInt(prev.dataset.id));
+                prev.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+            } else if (idx === 0) {
+                // At top — try prev page
+                const prevBtn = document.getElementById('page-prev');
+                if (prevBtn && !prevBtn.disabled) prevBtn.click();
+            }
+            break;
+        }
+        case 'Enter': {
+            e.preventDefault();
+            if (!selectedMailId) break;
+            document.getElementById('btn-view-message')?.click();
+            break;
+        }
+        case 'Home': {
+            e.preventDefault();
+            if (rows.length) {
+                const first = rows[0];
+                selectMail(parseInt(first.dataset.id));
+                first.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+            }
+            break;
+        }
+        case 'End': {
+            e.preventDefault();
+            if (rows.length) {
+                const last = rows[rows.length - 1];
+                selectMail(parseInt(last.dataset.id));
+                last.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+            }
+            break;
+        }
+        case 'PageDown': {
+            e.preventDefault();
+            const nextBtn = document.getElementById('page-next');
+            if (nextBtn && !nextBtn.disabled) nextBtn.click();
+            break;
+        }
+        case 'PageUp': {
+            e.preventDefault();
+            const prevBtn = document.getElementById('page-prev');
+            if (prevBtn && !prevBtn.disabled) prevBtn.click();
+            break;
+        }
+        case '/': {
+            e.preventDefault();
+            mailFilter.focus();
+            break;
+        }
+    }
+}
+
+// ── Global keydown handler ──────────────────────────────
+
+document.addEventListener('keydown', (e) => {
+    const ae = document.activeElement;
+    const tag = ae?.tagName;
+    const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+    // Modal keys — always handled first
+    const modal = getTopmostModal();
+    if (modal) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closeModal(modal);
+            return;
+        }
+        if (e.key === 'Enter' && modal.id === 'confirm-modal' && !inInput) {
+            e.preventDefault();
+            document.getElementById('confirm-ok')?.click();
+            return;
+        }
+        return; // Don't process panel keys when modal is open
+    }
+
+    // Escape in filter input — clear and blur
+    if (e.key === 'Escape' && inInput) {
+        e.preventDefault();
+        if (ae.classList.contains('panel-filter') || ae.classList.contains('search-input')) {
+            ae.value = '';
+            ae.dispatchEvent(new Event('input'));
+            ae.blur();
+        } else {
+            ae.blur();
+        }
+        return;
+    }
+
+    // Escape with no modal, no input — deselect
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        clearSelection();
+        return;
+    }
+
+    // Don't handle navigation keys when typing in inputs
+    if (inInput) return;
+
+    // Tab / Shift+Tab — cycle active panel
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        const idx = panelOrder.indexOf(activePanel);
+        if (e.shiftKey) {
+            setActivePanel(panelOrder[(idx - 1 + panelOrder.length) % panelOrder.length]);
+        } else {
+            setActivePanel(panelOrder[(idx + 1) % panelOrder.length]);
+        }
+        return;
+    }
+
+    // Route to active panel handler
+    if (activePanel === 'server') {
+        handleServerKeys(e);
+    } else if (activePanel === 'mail') {
+        handleMailKeys(e);
+    }
+});
+
+// Set initial active panel
+setActivePanel('server');
+
 // ── Init ────────────────────────────────────────────────
 
 loadServers();

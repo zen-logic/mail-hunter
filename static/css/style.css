@@ -188,6 +188,15 @@ body {
     overflow-y: auto;
 }
 
+.panel-content:focus {
+    outline: none;
+}
+
+.panel-focused > .panel-header {
+    border-bottom-color: var(--color-primary);
+    color: var(--color-text);
+}
+
 /* ── Activity log ───────────────────────────────────── */
 
 .activity-log-toggle {
