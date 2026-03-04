@@ -1195,7 +1195,7 @@ async function renderServerDetail() {
                 ${!isImportOnly && !syncing && server.last_sync ? `<button class="btn" id="btn-purge-sync">Delete &amp; Re-sync</button>` : ''}
                 ${!isImportOnly && syncing ? `<button class="btn" id="btn-cancel-sync">Cancel Sync</button>` : ''}
                 ${!isImportOnly ? `<button class="btn" id="btn-test-connection">Test Connection</button>` : ''}
-                <button class="btn btn-danger" id="btn-delete-server">Delete Server</button>
+                <button class="btn btn-danger" id="btn-delete-server">${isImportOnly ? 'Delete Import' : 'Delete Server'}</button>
             </div>
         </div>
     `;
@@ -1291,7 +1291,7 @@ async function renderServerDetail() {
 
     // Delete
     document.getElementById('btn-delete-server').addEventListener('click', async () => {
-        if (!await showConfirm(`Delete server "${server.name}" and all its messages?`)) return;
+        if (!await showConfirm(`Delete ${isImportOnly ? 'import' : 'server'} "${server.name}" and all its messages?`)) return;
         try {
             const resp = await fetch(`/api/servers/${server.id}`, { method: 'DELETE' });
             if (resp.ok) {
@@ -1500,9 +1500,9 @@ function renderDetail(mail) {
             <h3>Headers</h3>
             <div class="detail-field"><span class="label">From</span><span class="value">${esc(mail.from_addr || '')}</span></div>
             <div class="detail-field"><span class="label">To</span><span class="value">${esc(mail.to_addr || '')}</span></div>
+            ${mail.cc_addr ? `<div class="detail-field"><span class="label">CC</span><span class="value">${esc(mail.cc_addr)}</span></div>` : ''}
             <div class="detail-field"><span class="label">Date</span><span class="value">${formatDate(mail.date)}</span></div>
             <div class="detail-field"><span class="label">Size</span><span class="value">${formatSize(mail.size)}</span></div>
-            <div class="detail-field"><span class="label">CC</span><span class="value">${esc(mail.cc_addr || '')}</span></div>
         </div>
         ${mail.attachments?.length ? `<div class="detail-section">
             <h3>Attachments</h3>
