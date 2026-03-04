@@ -239,6 +239,11 @@ function handleWSMessage(msg) {
                 renderServerDetail();
             }
             break;
+        case 'sync_folders':
+            ActivityLog.add(`Found ${msg.folders.length} folders`);
+            loadServers();
+            if (msg.server_id === selectedServerId) renderServerDetail();
+            break;
         case 'sync_progress': {
             const detail = msg.total
                 ? `${msg.folder} — ${msg.count} of ${msg.total}`

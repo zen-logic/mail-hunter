@@ -174,6 +174,17 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False):
             )
             return
 
+        # Create all folders upfront so the tree updates immediately
+        for folder_name in folders:
+            await _ensure_folder(db, server_id, folder_name)
+        await broadcast(
+            {
+                "type": "sync_folders",
+                "server_id": server_id,
+                "folders": folders,
+            }
+        )
+
         for folder_name in folders:
             if server_id in _cancel_requested:
                 _active_syncs.discard(server_id)
