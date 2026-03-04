@@ -110,12 +110,31 @@ function initResize(handleId, leftPanel, rightPanel) {
         handle.classList.remove('dragging');
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
+        savePanelWidths();
     }
 }
 
 const serverPanel = document.getElementById('server-panel');
 const mailPanel = document.getElementById('mail-panel');
 const detailPanel = document.getElementById('detail-panel');
+
+function savePanelWidths() {
+    localStorage.setItem('mh-panel-widths', JSON.stringify({
+        server: serverPanel.style.width,
+        detail: detailPanel.style.width,
+    }));
+}
+
+function restorePanelWidths() {
+    try {
+        const saved = JSON.parse(localStorage.getItem('mh-panel-widths'));
+        if (!saved) return;
+        if (saved.server) serverPanel.style.width = saved.server;
+        if (saved.detail) detailPanel.style.width = saved.detail;
+    } catch (e) { /* ignore */ }
+}
+
+restorePanelWidths();
 
 initResize('resize-left', serverPanel, mailPanel);
 initResize('resize-right', mailPanel, detailPanel);
