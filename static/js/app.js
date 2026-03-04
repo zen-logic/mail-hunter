@@ -1401,10 +1401,13 @@ function renderMails(mails) {
     for (const m of mails) {
         const sel = m.id === selectedMailId ? ' selected' : '';
         const unread = m.unread ? ' unread' : '';
+        const fromDisplay = m.from_name || m.from_addr || '';
+        const toDisplay = m.to_addr || '';
+        const subjectDisplay = m.subject || '(no subject)';
         html += `<tr class="${sel}${unread}" data-id="${m.id}">
-            <td class="col-from">${esc(m.from_name || m.from_addr || '')}</td>
-            <td class="col-to">${esc(m.to_addr || '')}</td>
-            <td class="col-subject">${esc(m.subject || '(no subject)')}</td>
+            <td class="col-from" title="${esc(fromDisplay)}">${esc(fromDisplay)}</td>
+            <td class="col-to" title="${esc(toDisplay)}">${esc(toDisplay)}</td>
+            <td class="col-subject" title="${esc(subjectDisplay)}">${esc(subjectDisplay)}</td>
             <td class="col-date">${formatDate(m.date)}</td>
             <td class="col-size">${formatSize(m.size)}</td>
             <td class="col-attachments">${m.attachment_count || ''}</td>
