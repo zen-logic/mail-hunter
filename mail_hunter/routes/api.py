@@ -436,8 +436,9 @@ async def list_mails(request: Request):
     db = await get_db()
 
     if folder:
-        where = "m.server_id = ? AND f.name = ?"
-        params = (server_id, folder)
+        # Match the folder itself plus any children (separated by / or .)
+        where = "m.server_id = ? AND (f.name = ? OR f.name LIKE ? OR f.name LIKE ?)"
+        params = (server_id, folder, f"{folder}/%", f"{folder}.%")
         count_row = await db.execute_fetchall(
             "SELECT COUNT(*) as cnt FROM mails m JOIN folders f ON m.folder_id = f.id "
             f"WHERE {where}",
@@ -768,10 +769,11 @@ async def get_stats(request: Request):
     db = await get_db()
     row = await db.execute_fetchall(
         "SELECT COUNT(*) as messages, "
-        "COALESCE(SUM(CASE WHEN dup_count > 0 THEN 1 ELSE 0 END), 0) as duplicates "
+        "COALESCE(SUM(CASE WHEN dup_count > 0 THEN 1 ELSE 0 END), 0) as duplicates, "
+        "COALESCE(SUM(CASE WHEN legal_hold = 1 THEN 1 ELSE 0 END), 0) as held "
         "FROM mails"
     )
-    stats = dict(row[0]) if row else {"messages": 0, "duplicates": 0}
+    stats = dict(row[0]) if row else {"messages": 0, "duplicates": 0, "held": 0}
     server_row = await db.execute_fetchall("SELECT COUNT(*) as cnt FROM servers")
     stats["servers"] = server_row[0]["cnt"] if server_row else 0
     stats["archive_size"] = await asyncio.to_thread(_archive_disk_usage)

@@ -561,6 +561,10 @@ function renderGlobalStats() {
                     <div class="stat-label">Duplicates</div>
                 </div>
                 <div class="stat-card">
+                    <div class="stat-value">${s.held.toLocaleString()}</div>
+                    <div class="stat-label">Held</div>
+                </div>
+                <div class="stat-card">
                     <div class="stat-value">${formatSize(s.archive_size)}</div>
                     <div class="stat-label">Archive</div>
                 </div>
@@ -1427,6 +1431,8 @@ function selectServer(id) {
     selectedMailIds.clear();
     _anchorIdx = -1;
     currentPage = 0;
+    searchPanel.classList.add('hidden');
+    searchToggleBtn.classList.remove('btn-active');
     loadServers();
     loadMails();
     renderServerDetail();
@@ -1438,6 +1444,8 @@ function selectFolder(name) {
     selectedMailIds.clear();
     _anchorIdx = -1;
     currentPage = 0;
+    searchPanel.classList.add('hidden');
+    searchToggleBtn.classList.remove('btn-active');
     renderServers(allServers);
     loadMails();
     renderServerDetail();
