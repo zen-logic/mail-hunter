@@ -19,7 +19,6 @@ Email archiving and search tool for managing remote mailboxes and local mail arc
 ## Requirements
 
 - Python 3.11+
-- SQLite 3.35+ (for DROP COLUMN support)
 
 ## Quick Start
 
