@@ -115,6 +115,11 @@ MIGRATIONS = [
     ),
     # drop unused columns
     ("mails", "body_preview", "ALTER TABLE mails DROP COLUMN body_preview"),
+    (
+        "servers",
+        "is_gmail",
+        "ALTER TABLE servers ADD COLUMN is_gmail INTEGER NOT NULL DEFAULT 0",
+    ),
     # attachments columns
     (
         "attachments",

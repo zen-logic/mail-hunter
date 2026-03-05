@@ -1,13 +1,19 @@
+import asyncio
 import email
 import email.policy
+import logging
 from pathlib import Path
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from mail_hunter import __version__
-from mail_hunter.db import get_db, request_write_lock
+from mail_hunter.config import encrypt_password
+from mail_hunter.db import get_db, open_connection, request_write_lock
 from mail_hunter.services.parser import _extract_body, _extract_body_html
 from mail_hunter.services.store import extract_attachment_from_path, read_raw
+from mail_hunter.ws import broadcast
+
+logger = logging.getLogger(__name__)
 
 SORT_COLUMNS = {
     "from": "COALESCE(NULLIF(from_name,''),from_addr)",
@@ -43,7 +49,7 @@ def _sort_params(request):
 async def list_servers(request: Request):
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT id, name, host, port, username, last_sync FROM servers ORDER BY name"
+        "SELECT id, name, host, port, username, last_sync, is_gmail FROM servers ORDER BY name"
     )
     servers = []
     for r in rows:
@@ -61,6 +67,7 @@ async def list_servers(request: Request):
                 "port": r["port"],
                 "username": r["username"],
                 "last_sync": r["last_sync"],
+                "is_gmail": bool(r["is_gmail"]),
                 "folders": [{"name": f["name"], "count": f["count"]} for f in folders],
             }
         )
@@ -82,7 +89,7 @@ async def create_server(request: Request):
     db = await get_db()
     cursor = await db.execute(
         "INSERT INTO servers (name, host, port, username, password) VALUES (?, ?, ?, ?, ?)",
-        (name or host, host, port, username, password),
+        (name or host, host, port, username, encrypt_password(password)),
     )
     await db.commit()
     return JSONResponse({"id": cursor.lastrowid}, status_code=201)
@@ -111,16 +118,23 @@ async def update_server(request: Request):
         # Import servers: only the name can be updated
         if not name:
             return JSONResponse({"error": "name required"}, status_code=400)
-        await db.execute(
-            "UPDATE servers SET name=? WHERE id=?", (name, server_id)
-        )
+        await db.execute("UPDATE servers SET name=? WHERE id=?", (name, server_id))
     else:
         if not host or not username:
-            return JSONResponse({"error": "host and username required"}, status_code=400)
+            return JSONResponse(
+                {"error": "host and username required"}, status_code=400
+            )
         if password:
             await db.execute(
                 "UPDATE servers SET name=?, host=?, port=?, username=?, password=? WHERE id=?",
-                (name or host, host, port, username, password, server_id),
+                (
+                    name or host,
+                    host,
+                    port,
+                    username,
+                    encrypt_password(password),
+                    server_id,
+                ),
             )
         else:
             await db.execute(
@@ -133,27 +147,185 @@ async def update_server(request: Request):
 
 async def delete_server(request: Request):
     server_id = request.path_params["server_id"]
-    request_write_lock()
     db = await get_db()
 
-    # Collect raw file paths before cascade delete removes the rows
-    rows = await db.execute_fetchall(
-        "SELECT raw_path FROM mails WHERE server_id = ? AND raw_path IS NOT NULL",
-        (server_id,),
+    # Fetch server info before spawning background task
+    row = await db.execute_fetchall(
+        "SELECT name FROM servers WHERE id = ?", (server_id,)
     )
-    raw_paths = [r["raw_path"] for r in rows]
+    if not row:
+        return JSONResponse({"error": "server not found"}, status_code=404)
+    server_name = row[0]["name"]
 
-    await db.execute("DELETE FROM servers WHERE id = ?", (server_id,))
-    await db.commit()
+    count_row = await db.execute_fetchall(
+        "SELECT COUNT(*) as cnt FROM mails WHERE server_id = ?", (server_id,)
+    )
+    mail_count = count_row[0]["cnt"] if count_row else 0
 
-    # Remove archive files
-    for p in raw_paths:
-        try:
-            Path(p).unlink(missing_ok=True)
-        except OSError:
-            pass
-
+    asyncio.create_task(_delete_server_task(server_id, server_name, mail_count))
     return JSONResponse({"ok": True})
+
+
+async def _delete_server_task(server_id, server_name: str, mail_count: int):
+    conn = await open_connection()
+    try:
+        await broadcast(
+            {
+                "type": "delete_started",
+                "server_id": server_id,
+                "server_name": server_name,
+            }
+        )
+
+        # Collect raw file paths before cascade delete removes the rows
+        rows = await conn.execute_fetchall(
+            "SELECT raw_path FROM mails WHERE server_id = ? AND raw_path IS NOT NULL",
+            (server_id,),
+        )
+        raw_paths = [r["raw_path"] for r in rows]
+
+        await conn.execute("DELETE FROM servers WHERE id = ?", (server_id,))
+        await conn.commit()
+
+        # Remove archive files
+        total = len(raw_paths)
+        deleted = 0
+        for p in raw_paths:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
+            deleted += 1
+            if deleted % 100 == 0 or deleted == total:
+                await broadcast(
+                    {
+                        "type": "delete_progress",
+                        "server_id": server_id,
+                        "count": deleted,
+                        "total": total,
+                    }
+                )
+
+        await broadcast(
+            {
+                "type": "delete_completed",
+                "server_id": server_id,
+                "deleted": mail_count,
+            }
+        )
+    except Exception as exc:
+        logger.exception("delete_server_task failed for server %s", server_id)
+        await broadcast(
+            {
+                "type": "delete_error",
+                "server_id": server_id,
+                "error": str(exc),
+            }
+        )
+    finally:
+        await conn.close()
+
+
+async def delete_folder_messages(request: Request):
+    """Delete all messages in a folder."""
+    server_id = request.path_params["server_id"]
+    folder_name = request.query_params.get("folder", "").strip()
+    if not folder_name:
+        return JSONResponse({"error": "folder parameter required"}, status_code=400)
+
+    db = await get_db()
+
+    # Look up folder
+    row = await db.execute_fetchall(
+        "SELECT id FROM folders WHERE server_id = ? AND name = ?",
+        (server_id, folder_name),
+    )
+    if not row:
+        return JSONResponse({"error": "folder not found"}, status_code=404)
+    folder_id = row[0]["id"]
+
+    count_row = await db.execute_fetchall(
+        "SELECT COUNT(*) as cnt FROM mails WHERE folder_id = ?", (folder_id,)
+    )
+    mail_count = count_row[0]["cnt"] if count_row else 0
+
+    asyncio.create_task(
+        _delete_folder_task(server_id, folder_id, folder_name, mail_count)
+    )
+    return JSONResponse({"ok": True})
+
+
+async def _delete_folder_task(
+    server_id: int, folder_id: int, folder_name: str, mail_count: int
+):
+    conn = await open_connection()
+    try:
+        await broadcast(
+            {
+                "type": "delete_started",
+                "server_id": server_id,
+                "server_name": folder_name,
+            }
+        )
+
+        # Collect raw file paths before deleting
+        rows = await conn.execute_fetchall(
+            "SELECT raw_path FROM mails WHERE folder_id = ? AND raw_path IS NOT NULL",
+            (folder_id,),
+        )
+        raw_paths = [r["raw_path"] for r in rows]
+
+        await conn.execute("DELETE FROM mails WHERE folder_id = ?", (folder_id,))
+        await conn.execute(
+            "DELETE FROM folders WHERE id = ?", (folder_id,)
+        )
+        await conn.execute(
+            "DELETE FROM sync_state WHERE server_id = ? AND folder_name = ?",
+            (server_id, folder_name),
+        )
+        await conn.commit()
+
+        # Remove archive files
+        total = len(raw_paths)
+        deleted = 0
+        for p in raw_paths:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
+            deleted += 1
+            if deleted % 100 == 0 or deleted == total:
+                await broadcast(
+                    {
+                        "type": "delete_progress",
+                        "server_id": server_id,
+                        "count": deleted,
+                        "total": total,
+                    }
+                )
+
+        await broadcast(
+            {
+                "type": "delete_completed",
+                "server_id": server_id,
+                "deleted": mail_count,
+            }
+        )
+    except Exception as exc:
+        logger.exception(
+            "delete_folder_task failed for folder %s (server %s)",
+            folder_name,
+            server_id,
+        )
+        await broadcast(
+            {
+                "type": "delete_error",
+                "server_id": server_id,
+                "error": str(exc),
+            }
+        )
+    finally:
+        await conn.close()
 
 
 async def search_mails(request: Request):
@@ -204,7 +376,7 @@ async def search_mails(request: Request):
     if tag_q:
         for tag in [t.strip() for t in tag_q.split(",") if t.strip()]:
             conditions.append(
-                "EXISTS (SELECT 1 FROM tags t WHERE t.mail_id = mails.id AND t.tag = ?)"
+                "EXISTS (SELECT 1 FROM tags t WHERE t.mail_id = mails.id AND t.tag LIKE ?)"
             )
             params.append(tag)
 
@@ -225,7 +397,12 @@ async def search_mails(request: Request):
     )
 
     return JSONResponse(
-        {"items": [dict(r) for r in rows], "total": total, "page": page, "pageSize": PAGE_SIZE}
+        {
+            "items": [dict(r) for r in rows],
+            "total": total,
+            "page": page,
+            "pageSize": PAGE_SIZE,
+        }
     )
 
 
@@ -267,7 +444,12 @@ async def list_mails(request: Request):
         )
 
     return JSONResponse(
-        {"items": [dict(r) for r in rows], "total": total, "page": page, "pageSize": PAGE_SIZE}
+        {
+            "items": [dict(r) for r in rows],
+            "total": total,
+            "page": page,
+            "pageSize": PAGE_SIZE,
+        }
     )
 
 
@@ -440,7 +622,91 @@ async def get_mail_preview(request: Request):
     body_html = _extract_body_html(msg)
     raw_source = raw_bytes.decode("utf-8", errors="replace")
 
-    return JSONResponse({"body_text": body_text, "body_html": body_html, "raw_source": raw_source})
+    return JSONResponse(
+        {"body_text": body_text, "body_html": body_html, "raw_source": raw_source}
+    )
+
+
+async def batch_delete(request: Request):
+    """Delete multiple mails, skipping any on legal hold."""
+    data = await request.json()
+    mail_ids = data.get("mail_ids", [])
+    if not mail_ids:
+        return JSONResponse({"deleted": 0, "held": 0})
+
+    request_write_lock()
+    db = await get_db()
+
+    placeholders = ",".join("?" for _ in mail_ids)
+    rows = await db.execute_fetchall(
+        f"SELECT id, legal_hold, raw_path FROM mails WHERE id IN ({placeholders})",
+        mail_ids,
+    )
+
+    held = 0
+    to_delete = []
+    raw_paths = []
+    for r in rows:
+        if r["legal_hold"]:
+            held += 1
+        else:
+            to_delete.append(r["id"])
+            if r["raw_path"]:
+                raw_paths.append(r["raw_path"])
+
+    if to_delete:
+        del_placeholders = ",".join("?" for _ in to_delete)
+        await db.execute(
+            f"DELETE FROM mails WHERE id IN ({del_placeholders})", to_delete
+        )
+        await db.commit()
+
+    for p in raw_paths:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    return JSONResponse({"deleted": len(to_delete), "held": held})
+
+
+async def batch_tags(request: Request):
+    """Add/remove tags for multiple mails."""
+    data = await request.json()
+    mail_ids = data.get("mail_ids", [])
+    add_tags = data.get("add_tags", [])
+    remove_tags = data.get("remove_tags", [])
+    if not mail_ids or (not add_tags and not remove_tags):
+        return JSONResponse({"updated": 0})
+
+    request_write_lock()
+    db = await get_db()
+
+    updated = 0
+    for mail_id in mail_ids:
+        for tag in add_tags:
+            tag = tag.strip()
+            if not tag:
+                continue
+            try:
+                await db.execute(
+                    "INSERT INTO tags (mail_id, tag) VALUES (?, ?)", (mail_id, tag)
+                )
+                updated += 1
+            except Exception:
+                pass  # duplicate
+        for tag in remove_tags:
+            tag = tag.strip()
+            if not tag:
+                continue
+            cursor = await db.execute(
+                "DELETE FROM tags WHERE mail_id = ? AND tag = ?", (mail_id, tag)
+            )
+            if cursor.rowcount:
+                updated += 1
+
+    await db.commit()
+    return JSONResponse({"updated": updated})
 
 
 async def get_stats(request: Request):

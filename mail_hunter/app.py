@@ -7,6 +7,9 @@ from starlette.staticfiles import StaticFiles
 from starlette.responses import HTMLResponse
 from pathlib import Path
 
+from cryptography.fernet import InvalidToken
+
+from mail_hunter.config import decrypt_password, encrypt_password
 from mail_hunter.db import get_db, close_db
 from mail_hunter.ws import ws_endpoint
 from mail_hunter.routes.api import (
@@ -14,6 +17,7 @@ from mail_hunter.routes.api import (
     create_server,
     update_server,
     delete_server,
+    delete_folder_messages,
     search_mails,
     list_mails,
     get_mail,
@@ -23,11 +27,19 @@ from mail_hunter.routes.api import (
     get_mail_attachment,
     add_tag,
     remove_tag,
+    batch_delete,
+    batch_tags,
     get_stats,
     get_version,
 )
 from mail_hunter.routes.import_mail import import_upload
-from mail_hunter.routes.sync import sync_endpoint, stop_sync, test_server_connection
+from mail_hunter.routes.sync import (
+    sync_endpoint,
+    stop_sync,
+    test_server_connection,
+    backfill_labels_endpoint,
+    stop_backfill,
+)
 from mail_hunter.services.imap import sync_server
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -41,8 +53,28 @@ async def homepage(request):
 logger = logging.getLogger(__name__)
 
 
+async def _migrate_plaintext_passwords(db):
+    """Re-encrypt any plaintext passwords left from before encryption was added."""
+    rows = await db.execute_fetchall("SELECT id, password FROM servers")
+    for r in rows:
+        if not r["password"]:
+            continue
+        try:
+            decrypt_password(r["password"])
+        except InvalidToken:
+            # Not valid Fernet — still plaintext, encrypt it
+            encrypted = encrypt_password(r["password"])
+            await db.execute(
+                "UPDATE servers SET password = ? WHERE id = ?", (encrypted, r["id"])
+            )
+    await db.commit()
+
+
 async def on_startup():
     db = await get_db()
+
+    # Migrate any plaintext passwords to encrypted form
+    await _migrate_plaintext_passwords(db)
 
     # Resume any syncs that were in progress when the server last stopped
     rows = await db.execute_fetchall(
@@ -58,6 +90,7 @@ async def on_startup():
             )
             await db.commit()
             continue
+        server["password"] = decrypt_password(server["password"])
         logger.info("Resuming sync for server %s (id=%d)", server["name"], server["id"])
         asyncio.create_task(sync_server(server["id"], server))
 
@@ -73,16 +106,27 @@ routes = [
     Route("/api/servers/{server_id:int}/sync", sync_endpoint, methods=["GET", "POST"]),
     Route("/api/servers/{server_id:int}/sync/cancel", stop_sync, methods=["POST"]),
     Route(
+        "/api/servers/{server_id:int}/backfill",
+        backfill_labels_endpoint,
+        methods=["POST"],
+    ),
+    Route(
+        "/api/servers/{server_id:int}/backfill/cancel", stop_backfill, methods=["POST"]
+    ),
+    Route(
         "/api/servers/{server_id:int}/test", test_server_connection, methods=["POST"]
     ),
+    Route("/api/servers/{server_id:int}/folders", delete_folder_messages, methods=["DELETE"]),
     Route("/api/servers/{server_id:int}/mails", list_mails, methods=["GET"]),
     # Server CRUD
     Route("/api/servers", list_servers, methods=["GET"]),
     Route("/api/servers", create_server, methods=["POST"]),
     Route("/api/servers/{server_id:int}", update_server, methods=["PUT"]),
     Route("/api/servers/{server_id:int}", delete_server, methods=["DELETE"]),
-    # Mail routes
+    # Mail routes — batch endpoints before {mail_id} to avoid path conflicts
     Route("/api/mails/search", search_mails, methods=["GET"]),
+    Route("/api/mails/batch/delete", batch_delete, methods=["POST"]),
+    Route("/api/mails/batch/tags", batch_tags, methods=["POST"]),
     Route("/api/mails/{mail_id:int}", get_mail, methods=["GET"]),
     Route("/api/mails/{mail_id:int}", delete_mail, methods=["DELETE"]),
     Route("/api/mails/{mail_id:int}/raw", get_mail_raw, methods=["GET"]),

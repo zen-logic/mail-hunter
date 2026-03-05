@@ -35,8 +35,6 @@
     --color-status-ok: #60c060;
     --color-status-warn: #e8c840;
     --color-status-error: #ff6b6b;
-    --color-danger-hover: #ff5252;
-
     /* Tags */
     --color-tag-bg: #1a2a3a;
     --color-tag-text: #60c0d0;
@@ -344,13 +342,14 @@ body {
 }
 
 .btn-primary {
-    background: var(--color-primary);
+    background: var(--btn-primary-bg, var(--color-primary));
     border-color: var(--color-primary);
-    color: #fff;
+    color: var(--btn-primary-text, #fff);
 }
 
 .btn-primary:hover {
-    background: var(--color-primary-hover);
+    background: var(--btn-primary-bg-hover, var(--color-primary-hover));
+    border-color: var(--color-primary-hover);
 }
 
 .btn-danger {
@@ -360,8 +359,9 @@ body {
 }
 
 .btn-danger:hover {
-    background: var(--color-danger-hover);
-    border-color: var(--color-danger-hover);
+    background: var(--color-status-error);
+    border-color: var(--color-status-error);
+    filter: brightness(1.2);
 }
 
 .btn-sm {
@@ -520,6 +520,21 @@ body {
     white-space: nowrap;
 }
 
+.col-resize-handle {
+    position: absolute;
+    right: -2px;
+    top: 0;
+    width: 5px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 1;
+}
+
+.col-resize-handle:hover,
+.col-resize-handle.dragging {
+    background: var(--color-primary);
+}
+
 .mail-table th:hover {
     color: var(--color-text-dim);
 }
@@ -536,6 +551,11 @@ body {
     text-overflow: ellipsis;
 }
 
+.mail-table {
+    -webkit-user-select: none;
+    user-select: none;
+}
+
 .mail-table tr:hover {
     background: var(--color-surface-active);
     cursor: pointer;
@@ -549,29 +569,25 @@ body {
     font-weight: var(--font-weight-semibold);
 }
 
-.mail-table .col-from {
-    width: 120px;
+.mail-table .col-check {
+    text-align: center;
 }
 
-.mail-table .col-to {
-    width: 120px;
+.mail-table .col-check input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
 }
 
-.mail-table .col-subject {
-    /* takes remaining space */
-}
-
-.mail-table .col-date {
-    width: 175px;
+.mail-table td.col-check {
+    overflow: visible;
+    text-overflow: clip;
 }
 
 .mail-table .col-size {
-    width: 80px;
     text-align: right;
 }
 
 .mail-table .col-attachments {
-    width: 40px;
     text-align: center;
 }
 
@@ -631,19 +647,61 @@ body {
 
 .detail-field {
     display: flex;
-    justify-content: space-between;
+    gap: 0.75rem;
     padding: 0.2rem 0;
 }
 
 .detail-field .label {
     color: var(--color-text-muted);
+    width: 5rem;
+    flex-shrink: 0;
 }
 
 .detail-field .value {
     color: var(--color-text);
-    text-align: right;
-    max-width: 65%;
     word-break: break-all;
+}
+
+/* ── Multi-select detail ────────────────────────────── */
+
+.multi-select-header {
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    word-break: break-word;
+    line-height: 1.3;
+}
+
+.multi-select-size {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    margin-top: 0.25rem;
+}
+
+.multi-select-list {
+    max-height: 200px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.multi-select-item {
+    font-size: var(--font-size-sm);
+    padding: 0.2rem 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+    line-height: 1.3;
+}
+
+.multi-select-item .ms-subject {
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.multi-select-item .ms-from {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
 }
 
 /* ── Tags ───────────────────────────────────────────── */
@@ -909,9 +967,9 @@ body {
 }
 
 .preview-toggle button.active {
-    background: var(--color-primary);
+    background: var(--btn-primary-bg, var(--color-primary));
     border-color: var(--color-primary);
-    color: #fff;
+    color: var(--btn-primary-text, #fff);
 }
 
 .preview-headers {

@@ -186,6 +186,69 @@ restorePanelWidths();
 initResize('resize-left', serverPanel, mailPanel);
 initResize('resize-right', mailPanel, detailPanel);
 
+// ── Column resize ───────────────────────────────────────
+
+const COL_WIDTH_KEY = 'mh-col-widths';
+const COL_KEYS = ['from', 'to', 'subject', 'date', 'size'];
+const COL_MIN = 40;
+
+function restoreColWidths() {
+    try {
+        return JSON.parse(localStorage.getItem(COL_WIDTH_KEY)) || {};
+    } catch (e) { return {}; }
+}
+
+function saveColWidths(table) {
+    const cols = table.querySelectorAll('colgroup col');
+    const widths = {};
+    // cols: 0=check, 1=from, 2=to, 3=subject, 4=date, 5=size, 6=att
+    for (let i = 0; i < COL_KEYS.length; i++) {
+        const col = cols[i + 1]; // skip checkbox col
+        const w = col.style.width;
+        if (w) widths[COL_KEYS[i]] = parseInt(w);
+    }
+    localStorage.setItem(COL_WIDTH_KEY, JSON.stringify(widths));
+}
+
+function initColumnResize(table) {
+    if (!table) return;
+    const cols = table.querySelectorAll('colgroup col');
+    table.querySelectorAll('.col-resize-handle').forEach(handle => {
+        const th = handle.parentElement;
+        // Map th to col index: th index within the header row
+        const thIndex = Array.from(th.parentElement.children).indexOf(th);
+        const col = cols[thIndex];
+        if (!col) return;
+
+        handle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const startX = e.clientX;
+            const startW = th.offsetWidth;
+            handle.classList.add('dragging');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+
+            function onMove(ev) {
+                const w = Math.max(COL_MIN, startW + (ev.clientX - startX));
+                col.style.width = w + 'px';
+            }
+
+            function onUp() {
+                handle.classList.remove('dragging');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                saveColWidths(table);
+            }
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    });
+}
+
 // ── Activity log ────────────────────────────────────────
 
 const activityToggle = document.getElementById('activity-log-toggle');
@@ -352,6 +415,50 @@ function handleWSMessage(msg) {
             renderServers(allServers);
             if (msg.server_id === selectedServerId) renderServerDetail();
             break;
+        case 'backfill_started':
+            ActivityLog.add(`Label backfill started: ${msg.server_name || 'server'}`);
+            backfillingServerId = msg.server_id;
+            renderBackfillStatus(`Backfill: starting...`);
+            break;
+        case 'backfill_progress':
+            renderBackfillStatus(`Backfill: ${msg.count}/${msg.total} (${msg.tagged} tagged)`);
+            break;
+        case 'backfill_completed':
+            ActivityLog.add(`Label backfill complete: ${msg.tagged} messages tagged`);
+            backfillingServerId = null;
+            renderBackfillStatus(null);
+            loadStats();
+            break;
+        case 'backfill_cancelled':
+            ActivityLog.add(`Label backfill cancelled (${msg.tagged} tagged before cancel)`);
+            backfillingServerId = null;
+            renderBackfillStatus(null);
+            break;
+        case 'backfill_error':
+            ActivityLog.add(`Backfill error: ${msg.error}`);
+            backfillingServerId = null;
+            renderBackfillStatus(null);
+            break;
+        case 'delete_started':
+            ActivityLog.add(`Deleting server: ${msg.server_name}`);
+            statusActivity.innerHTML = `<span class="status-sync-text">${esc(`Deleting ${msg.server_name}...`)}</span>`;
+            break;
+        case 'delete_progress':
+            statusActivity.innerHTML = `<span class="status-sync-text">${esc(`Deleting: ${msg.count} / ${msg.total} files removed`)}</span>`;
+            if (msg.count % 500 === 0) {
+                ActivityLog.add(`Delete progress: ${msg.count} / ${msg.total} files`);
+            }
+            break;
+        case 'delete_completed':
+            ActivityLog.add(`Server deleted: ${msg.deleted} messages removed`);
+            renderSyncStatus(null);
+            loadStats();
+            break;
+        case 'delete_error':
+            ActivityLog.add(`Delete error: ${msg.error}`);
+            renderSyncStatus(null);
+            loadServers();
+            break;
         default:
             if (msg.message) ActivityLog.add(msg.message);
             break;
@@ -382,11 +489,14 @@ async function loadStats() {
 
 let syncingServerId = null;
 let fullSyncServerId = null;
+let backfillingServerId = null;
 const statusActivity = document.getElementById('status-activity');
 
 function renderSyncStatus(detail) {
     if (!detail) {
-        statusActivity.innerHTML = '<span class="status-idle">Idle</span>';
+        if (!backfillingServerId) {
+            statusActivity.innerHTML = '<span class="status-idle">Idle</span>';
+        }
         return;
     }
     statusActivity.innerHTML = `
@@ -397,6 +507,28 @@ function renderSyncStatus(detail) {
         if (syncingServerId) {
             try {
                 await fetch(`/api/servers/${syncingServerId}/sync/cancel`, { method: 'POST' });
+            } catch (err) {
+                console.error('Cancel failed:', err);
+            }
+        }
+    });
+}
+
+function renderBackfillStatus(detail) {
+    if (!detail) {
+        if (!syncingServerId) {
+            statusActivity.innerHTML = '<span class="status-idle">Idle</span>';
+        }
+        return;
+    }
+    statusActivity.innerHTML = `
+        <span class="status-sync-text">${esc(detail)}</span>
+        <button class="btn btn-sm status-cancel-btn" id="status-cancel-backfill">Cancel</button>
+    `;
+    document.getElementById('status-cancel-backfill')?.addEventListener('click', async () => {
+        if (backfillingServerId) {
+            try {
+                await fetch(`/api/servers/${backfillingServerId}/backfill/cancel`, { method: 'POST' });
             } catch (err) {
                 console.error('Cancel failed:', err);
             }
@@ -422,7 +554,7 @@ serverFilter.addEventListener('keydown', (e) => {
 
 const searchPanel = document.getElementById('search-panel');
 const searchToggleBtn = document.getElementById('btn-search');
-const searchFields = ['search-from', 'search-to', 'search-subject', 'search-body', 'search-date-from', 'search-date-to', 'search-tag'];
+const searchFields = ['search-from', 'search-to', 'search-subject', 'search-body', 'search-date-from', 'search-date-to', 'search-tag', 'search-server'];
 
 searchToggleBtn.addEventListener('click', () => {
     const visible = !searchPanel.classList.contains('hidden');
@@ -447,7 +579,9 @@ function getSearchParams() {
     if (dateFrom) params.date_from = dateFrom;
     if (dateTo) params.date_to = dateTo;
     if (tag) params.tag = tag;
-    if (selectedServerId) params.server_id = selectedServerId;
+    const searchServer = document.getElementById('search-server').value;
+    if (searchServer) params.server_id = searchServer;
+    else if (selectedServerId) params.server_id = selectedServerId;
     return params;
 }
 
@@ -475,6 +609,8 @@ searchFields.forEach(id => {
 });
 
 async function doSearch() {
+    selectedMailIds.clear();
+    _anchorIdx = -1;
     const params = getSearchParams();
     params.sort = sortKey;
     params.sortDir = sortDirParam();
@@ -517,6 +653,8 @@ function toggleSort(key) {
         sortDir = 1;
     }
     currentPage = 0;
+    selectedMailIds.clear();
+    _anchorIdx = -1;
     if (hasSearchParams()) {
         doSearch();
     } else {
@@ -534,6 +672,8 @@ mailFilter.addEventListener('keydown', (e) => {
 });
 
 function applyFilterAndRender() {
+    selectedMailIds.clear();
+    _anchorIdx = -1;
     const q = mailFilter.value.trim().toLowerCase();
     if (!q) {
         renderMails(currentMails);
@@ -653,16 +793,14 @@ async function renderSettings() {
             const id = parseInt(btn.dataset.delete);
             const server = servers.find(s => s.id === id);
             if (!await showConfirm(`Delete server "${server?.name}" and all its messages?`)) return;
-            try {
-                const resp = await fetch(`/api/servers/${id}`, { method: 'DELETE' });
-                if (resp.ok) {
-                    if (selectedServerId === id) clearSelection();
-                    renderSettings();
-                    loadServers();
-                }
-            } catch (err) {
+            // Remove from tree immediately
+            allServers = allServers.filter(s => s.id !== id);
+            renderServers(allServers);
+            if (selectedServerId === id) clearSelection();
+            renderSettings();
+            fetch(`/api/servers/${id}`, { method: 'DELETE' }).catch(err => {
                 console.error('Delete failed:', err);
-            }
+            });
         });
     });
 }
@@ -926,6 +1064,8 @@ async function startDirectImport(files) {
 let selectedServerId = null;
 let selectedFolder = null;
 let selectedMailId = null;
+const selectedMailIds = new Set();
+let _anchorIdx = -1;
 
 async function loadServers() {
     try {
@@ -933,9 +1073,23 @@ async function loadServers() {
         if (!resp.ok) return;
         allServers = await resp.json();
         renderServers(allServers);
+        updateSearchServerOptions();
     } catch (err) {
         console.error('Failed to load servers:', err);
     }
+}
+
+function updateSearchServerOptions() {
+    const sel = document.getElementById('search-server');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">All servers</option>';
+    for (const s of allServers) {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name;
+        sel.appendChild(opt);
+    }
+    sel.value = cur;
 }
 
 function getCollapsedNodes() {
@@ -1118,6 +1272,8 @@ function clearSelection() {
     selectedServerId = null;
     selectedFolder = null;
     selectedMailId = null;
+    selectedMailIds.clear();
+    _anchorIdx = -1;
     currentMails = [];
     totalMails = 0;
     currentPage = 0;
@@ -1134,6 +1290,8 @@ function selectServer(id) {
     selectedServerId = id;
     selectedFolder = null;
     selectedMailId = null;
+    selectedMailIds.clear();
+    _anchorIdx = -1;
     currentPage = 0;
     loadServers();
     loadMails();
@@ -1143,6 +1301,8 @@ function selectServer(id) {
 function selectFolder(name) {
     selectedFolder = name;
     selectedMailId = null;
+    selectedMailIds.clear();
+    _anchorIdx = -1;
     currentPage = 0;
     renderServers(allServers);
     loadMails();
@@ -1154,6 +1314,66 @@ async function renderServerDetail() {
     const server = allServers.find(s => s.id === selectedServerId);
     if (!server) {
         container.innerHTML = '<div class="empty-state"><span>Select a message</span></div>';
+        return;
+    }
+
+    if (selectedFolder) {
+        const leafName = selectedFolder.includes('/') ? selectedFolder.split('/').pop()
+            : selectedFolder.includes('.') ? selectedFolder.split('.').pop()
+            : selectedFolder;
+        const folderObj = (server.folders || []).find(f => f.name === selectedFolder);
+        const msgCount = folderObj ? (folderObj.count || 0) : 0;
+        const isImportOnly = !server.host;
+        const syncing = syncingServerId === server.id;
+        container.innerHTML = `
+            <div class="detail-section">
+                <div class="detail-subject">${esc(leafName)}</div>
+            </div>
+            <div class="detail-section">
+                <h3>Folder Info</h3>
+                <div class="detail-field"><span class="label">Path</span><span class="value">${esc(selectedFolder)}</span></div>
+                <div class="detail-field"><span class="label">Messages</span><span class="value">${msgCount.toLocaleString()}</span></div>
+            </div>
+            <div class="detail-section">
+                <div class="detail-btn-group">
+                    ${!isImportOnly && !syncing ? `<button class="btn" id="btn-sync-folder">Sync Folder</button>` : ''}
+                    ${msgCount > 0 ? `<button class="btn btn-danger" id="btn-delete-folder-msgs">Delete Messages</button>` : ''}
+                </div>
+            </div>
+        `;
+
+        document.getElementById('btn-sync-folder')?.addEventListener('click', async () => {
+            try {
+                const resp = await fetch(`/api/servers/${server.id}/sync?folder=${encodeURIComponent(selectedFolder)}`, { method: 'POST' });
+                if (resp.ok) {
+                    renderServerDetail();
+                } else {
+                    const err = await resp.json();
+                    ActivityLog.add(`Sync failed: ${err.error || 'unknown error'}`);
+                }
+            } catch (err) {
+                ActivityLog.add(`Sync failed: ${err.message}`);
+            }
+        });
+
+        document.getElementById('btn-delete-folder-msgs')?.addEventListener('click', async () => {
+            if (!await showConfirm(`Delete all ${msgCount} messages in "${leafName}"?`)) return;
+            try {
+                const resp = await fetch(`/api/servers/${server.id}/folders?folder=${encodeURIComponent(selectedFolder)}`, { method: 'DELETE' });
+                if (resp.ok) {
+                    selectedFolder = null;
+                    loadServers();
+                    loadMails();
+                    renderServerDetail();
+                } else {
+                    const err = await resp.json();
+                    ActivityLog.add(`Delete failed: ${err.error || 'unknown error'}`);
+                }
+            } catch (err) {
+                ActivityLog.add(`Delete failed: ${err.message}`);
+            }
+        });
+
         return;
     }
 
@@ -1194,6 +1414,7 @@ async function renderServerDetail() {
                 ${!isImportOnly && !syncing && server.last_sync ? `<button class="btn" id="btn-full-sync">Full Sync</button>` : ''}
                 ${!isImportOnly && !syncing && server.last_sync ? `<button class="btn" id="btn-purge-sync">Delete &amp; Re-sync</button>` : ''}
                 ${!isImportOnly && syncing ? `<button class="btn" id="btn-cancel-sync">Cancel Sync</button>` : ''}
+                ${!isImportOnly && !syncing && server.is_gmail ? `<button class="btn" id="btn-backfill-labels">Backfill Labels</button>` : ''}
                 ${!isImportOnly ? `<button class="btn" id="btn-test-connection">Test Connection</button>` : ''}
                 <button class="btn btn-danger" id="btn-delete-server">${isImportOnly ? 'Delete Import' : 'Delete Server'}</button>
             </div>
@@ -1269,6 +1490,21 @@ async function renderServerDetail() {
         }
     });
 
+    // Backfill labels
+    document.getElementById('btn-backfill-labels')?.addEventListener('click', async () => {
+        try {
+            const resp = await fetch(`/api/servers/${server.id}/backfill`, { method: 'POST' });
+            if (resp.ok) {
+                ActivityLog.add('Label backfill started');
+            } else {
+                const err = await resp.json();
+                ActivityLog.add(`Backfill failed: ${err.error || 'unknown error'}`);
+            }
+        } catch (err) {
+            ActivityLog.add(`Backfill failed: ${err.message}`);
+        }
+    });
+
     // Test connection
     document.getElementById('btn-test-connection')?.addEventListener('click', async () => {
         const btn = document.getElementById('btn-test-connection');
@@ -1279,6 +1515,8 @@ async function renderServerDetail() {
             const result = await resp.json();
             if (result.ok) {
                 ActivityLog.add(`Connection OK — ${result.folders.length} folders: ${result.folders.join(', ')}`);
+                await loadServers();
+                renderServerDetail();
             } else {
                 ActivityLog.add(`Connection failed: ${result.error}`);
             }
@@ -1292,15 +1530,13 @@ async function renderServerDetail() {
     // Delete
     document.getElementById('btn-delete-server').addEventListener('click', async () => {
         if (!await showConfirm(`Delete ${isImportOnly ? 'import' : 'server'} "${server.name}" and all its messages?`)) return;
-        try {
-            const resp = await fetch(`/api/servers/${server.id}`, { method: 'DELETE' });
-            if (resp.ok) {
-                clearSelection();
-                loadServers();
-            }
-        } catch (err) {
+        // Remove from tree immediately
+        allServers = allServers.filter(s => s.id !== server.id);
+        renderServers(allServers);
+        clearSelection();
+        fetch(`/api/servers/${server.id}`, { method: 'DELETE' }).catch(err => {
             console.error('Delete failed:', err);
-        }
+        });
     });
 }
 
@@ -1308,6 +1544,8 @@ async function renderServerDetail() {
 
 async function loadMails() {
     if (!selectedServerId) return;
+    selectedMailIds.clear();
+    _anchorIdx = -1;
     const container = document.getElementById('mail-content');
     const countEl = document.getElementById('mail-count');
     const titleEl = document.getElementById('mail-panel-title');
@@ -1341,11 +1579,12 @@ function sortArrow(dir) {
     return '<span class="sort-indicator"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M5 8L1 2H9Z" fill="currentColor"/></svg></span>';
 }
 
-function sortHeader(label, key, cls) {
+function sortHeader(label, key, cls, resizable = true) {
     const active = sortKey === key;
     const activeClass = active ? ' sort-active' : '';
     const arrow = active ? sortArrow(sortDir) : '';
-    return `<th class="${cls}${activeClass}" data-sort="${key}">${label}${arrow}</th>`;
+    const handle = resizable ? '<div class="col-resize-handle"></div>' : '';
+    return `<th class="${cls}${activeClass}" data-sort="${key}">${label}${arrow}${handle}</th>`;
 }
 
 function renderPagingBar() {
@@ -1381,6 +1620,49 @@ function renderPagingBar() {
     });
 }
 
+function _getVisibleMails() {
+    // Returns the mails array currently rendered (filtered or not)
+    const q = mailFilter.value.trim().toLowerCase();
+    if (!q) return currentMails;
+    return currentMails.filter(m =>
+        (m.from_name || '').toLowerCase().includes(q) ||
+        (m.from_addr || '').toLowerCase().includes(q) ||
+        (m.to_addr || '').toLowerCase().includes(q) ||
+        (m.subject || '').toLowerCase().includes(q)
+    );
+}
+
+function _updateHeaderCheckbox() {
+    const cb = document.getElementById('header-check');
+    if (!cb) return;
+    const visible = _getVisibleMails();
+    const visibleIds = visible.map(m => m.id);
+    const selectedCount = visibleIds.filter(id => selectedMailIds.has(id)).length;
+    cb.checked = selectedCount > 0 && selectedCount === visibleIds.length;
+    cb.indeterminate = selectedCount > 0 && selectedCount < visibleIds.length;
+}
+
+function _updateRowCheckboxes() {
+    document.querySelectorAll('.mail-table tbody tr[data-id]').forEach(el => {
+        const id = parseInt(el.dataset.id);
+        const cb = el.querySelector('.row-check');
+        if (cb) cb.checked = selectedMailIds.has(id);
+        el.classList.toggle('selected', selectedMailIds.has(id) || id === selectedMailId);
+    });
+}
+
+function _syncDetailPanel() {
+    if (selectedMailIds.size > 1) {
+        renderMultiSelect();
+    } else if (selectedMailIds.size === 1) {
+        const id = [...selectedMailIds][0];
+        selectedMailId = id;
+        selectMail(id);
+    } else if (selectedMailId) {
+        // single select still active, leave detail as-is
+    }
+}
+
 function renderMails(mails) {
     const container = document.getElementById('mail-content');
     if (!mails || !mails.length) {
@@ -1389,7 +1671,23 @@ function renderMails(mails) {
         return;
     }
 
-    let html = `<table class="mail-table"><thead><tr>
+    const colWidths = restoreColWidths();
+    const colFrom = colWidths.from ? ` style="width:${colWidths.from}px"` : ' style="width:120px"';
+    const colTo = colWidths.to ? ` style="width:${colWidths.to}px"` : ' style="width:120px"';
+    const colSubject = colWidths.subject ? ` style="width:${colWidths.subject}px"` : '';
+    const colDate = colWidths.date ? ` style="width:${colWidths.date}px"` : ' style="width:175px"';
+    const colSize = colWidths.size ? ` style="width:${colWidths.size}px"` : ' style="width:80px"';
+
+    let html = `<table class="mail-table"><colgroup>
+        <col style="width:30px">
+        <col${colFrom}>
+        <col${colTo}>
+        <col${colSubject}>
+        <col${colDate}>
+        <col${colSize}>
+        <col style="width:40px">
+    </colgroup><thead><tr>
+        <th class="col-check"><input type="checkbox" id="header-check"></th>
         ${sortHeader('From', 'from', 'col-from')}
         ${sortHeader('To', 'to', 'col-to')}
         ${sortHeader('Subject', 'subject', 'col-subject')}
@@ -1399,12 +1697,14 @@ function renderMails(mails) {
     </tr></thead><tbody>`;
 
     for (const m of mails) {
-        const sel = m.id === selectedMailId ? ' selected' : '';
+        const sel = (selectedMailIds.has(m.id) || m.id === selectedMailId) ? ' selected' : '';
         const unread = m.unread ? ' unread' : '';
+        const checked = selectedMailIds.has(m.id) ? ' checked' : '';
         const fromDisplay = m.from_name || m.from_addr || '';
         const toDisplay = m.to_addr || '';
         const subjectDisplay = m.subject || '(no subject)';
         html += `<tr class="${sel}${unread}" data-id="${m.id}">
+            <td class="col-check"><input type="checkbox" class="row-check"${checked}></td>
             <td class="col-from" title="${esc(fromDisplay)}">${esc(fromDisplay)}</td>
             <td class="col-to" title="${esc(toDisplay)}">${esc(toDisplay)}</td>
             <td class="col-subject" title="${esc(subjectDisplay)}">${esc(subjectDisplay)}</td>
@@ -1417,20 +1717,108 @@ function renderMails(mails) {
     html += '</tbody></table>';
     container.innerHTML = html;
 
+    // Sort headers (ignore clicks on resize handle)
     container.querySelectorAll('th[data-sort]').forEach(el => {
-        el.addEventListener('click', () => toggleSort(el.dataset.sort));
-    });
-    container.querySelectorAll('tr[data-id]').forEach(el => {
-        el.addEventListener('click', () => selectMail(parseInt(el.dataset.id)));
+        el.addEventListener('click', (e) => {
+            if (e.target.classList.contains('col-resize-handle')) return;
+            toggleSort(el.dataset.sort);
+        });
     });
 
+    // Column resize
+    initColumnResize(container.querySelector('.mail-table'));
+
+    // Header checkbox — toggle all visible
+    document.getElementById('header-check')?.addEventListener('change', (e) => {
+        const visible = _getVisibleMails();
+        if (e.target.checked) {
+            visible.forEach(m => selectedMailIds.add(m.id));
+        } else {
+            visible.forEach(m => selectedMailIds.delete(m.id));
+        }
+        _updateRowCheckboxes();
+        _updateHeaderCheckbox();
+        _syncDetailPanel();
+    });
+
+    // Row clicks
+    container.querySelectorAll('tr[data-id]').forEach(el => {
+        const id = parseInt(el.dataset.id);
+        const visibleMails = mails; // capture for closure
+
+        // Checkbox click — toggle without changing anchor
+        el.querySelector('.row-check')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (selectedMailIds.has(id)) {
+                selectedMailIds.delete(id);
+            } else {
+                selectedMailIds.add(id);
+            }
+            if (selectedMailIds.size === 0) {
+                selectedMailId = null;
+                renderDetail(null);
+            }
+            _updateRowCheckboxes();
+            _updateHeaderCheckbox();
+            _syncDetailPanel();
+        });
+
+        // Row click
+        el.addEventListener('click', (e) => {
+            // Ignore if click was on the checkbox
+            if (e.target.classList.contains('row-check')) return;
+
+            const isMeta = e.ctrlKey || e.metaKey;
+            const isShift = e.shiftKey;
+            const idx = visibleMails.findIndex(m => m.id === id);
+
+            if (isShift && _anchorIdx >= 0) {
+                // Range select
+                const start = Math.min(_anchorIdx, idx);
+                const end = Math.max(_anchorIdx, idx);
+                if (!isMeta) selectedMailIds.clear();
+                for (let i = start; i <= end; i++) {
+                    selectedMailIds.add(visibleMails[i].id);
+                }
+                selectedMailId = id;
+                _updateRowCheckboxes();
+                _updateHeaderCheckbox();
+                _syncDetailPanel();
+            } else if (isMeta) {
+                // Toggle in set
+                if (selectedMailIds.has(id)) {
+                    selectedMailIds.delete(id);
+                } else {
+                    selectedMailIds.add(id);
+                }
+                _anchorIdx = idx;
+                selectedMailId = id;
+                _updateRowCheckboxes();
+                _updateHeaderCheckbox();
+                _syncDetailPanel();
+            } else {
+                // Plain click — single select
+                selectedMailIds.clear();
+                selectedMailIds.add(id);
+                _anchorIdx = idx;
+                selectMail(id);
+            }
+        });
+    });
+
+    _updateHeaderCheckbox();
     renderPagingBar();
 }
 
 async function selectMail(id) {
     selectedMailId = id;
-    document.querySelectorAll('.mail-table tr.selected').forEach(el => el.classList.remove('selected'));
-    document.querySelector(`.mail-table tr[data-id="${id}"]`)?.classList.add('selected');
+    // Update row highlight — include multi-selected rows
+    document.querySelectorAll('.mail-table tr[data-id]').forEach(el => {
+        const rowId = parseInt(el.dataset.id);
+        el.classList.toggle('selected', rowId === id || selectedMailIds.has(rowId));
+    });
+    _updateRowCheckboxes();
+    _updateHeaderCheckbox();
     try {
         const resp = await fetch(`/api/mails/${id}`);
         if (!resp.ok) return;
@@ -1623,6 +2011,99 @@ function renderDetail(mail) {
             }
         });
     });
+}
+
+// ── Multi-select detail panel ────────────────────────────
+
+function renderMultiSelect() {
+    const container = document.getElementById('detail-content');
+    const visible = _getVisibleMails();
+    const selected = visible.filter(m => selectedMailIds.has(m.id));
+    const totalSize = selected.reduce((sum, m) => sum + (m.size || 0), 0);
+
+    let listHtml = selected.map(m => {
+        const from = m.from_name || m.from_addr || '';
+        const subject = m.subject || '(no subject)';
+        return `<div class="multi-select-item">
+            <div class="ms-subject" title="${esc(subject)}">${esc(subject)}</div>
+            <div class="ms-from">${esc(from)}</div>
+        </div>`;
+    }).join('');
+
+    container.innerHTML = `
+        <div class="detail-section">
+            <div class="multi-select-header">${selectedMailIds.size} Messages Selected</div>
+            <div class="multi-select-size">${formatSize(totalSize)} total</div>
+        </div>
+        <div class="detail-section">
+            <h3>Batch Actions</h3>
+            <div class="detail-btn-group">
+                <button class="btn btn-danger" id="btn-batch-delete">Delete</button>
+            </div>
+        </div>
+        <div class="detail-section">
+            <h3>Tags</h3>
+            <div class="tag-input-row">
+                <input class="tag-input" id="batch-tag-input" placeholder="Add tag to all...">
+                <button class="btn btn-sm" id="btn-batch-add-tag">Add</button>
+            </div>
+        </div>
+        <div class="detail-section">
+            <h3>Selected Items</h3>
+            <div class="multi-select-list">${listHtml}</div>
+        </div>
+    `;
+
+    // Batch delete
+    document.getElementById('btn-batch-delete')?.addEventListener('click', async () => {
+        if (!await showConfirm(`Delete ${selectedMailIds.size} messages?`)) return;
+        try {
+            const resp = await fetch('/api/mails/batch/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mail_ids: [...selectedMailIds] }),
+            });
+            if (!resp.ok) return;
+            const result = await resp.json();
+            ActivityLog.add(`Batch delete: ${result.deleted} deleted${result.held ? ', ' + result.held + ' on legal hold' : ''}`);
+            selectedMailIds.clear();
+            _anchorIdx = -1;
+            selectedMailId = null;
+            if (hasSearchParams()) {
+                doSearch();
+            } else {
+                loadMails();
+            }
+            loadServers();
+            loadStats();
+            renderDetail(null);
+        } catch (err) {
+            console.error('Batch delete failed:', err);
+        }
+    });
+
+    // Batch add tag
+    const batchTagInput = document.getElementById('batch-tag-input');
+    const addBatchTag = async () => {
+        const tag = batchTagInput.value.trim();
+        if (!tag) return;
+        try {
+            const resp = await fetch('/api/mails/batch/tags', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mail_ids: [...selectedMailIds], add_tags: [tag] }),
+            });
+            if (!resp.ok) return;
+            const result = await resp.json();
+            ActivityLog.add(`Batch tag: added "${tag}" to ${result.updated} items`);
+            batchTagInput.value = '';
+        } catch (err) {
+            console.error('Batch tag failed:', err);
+        }
+    };
+
+    document.getElementById('btn-batch-add-tag')?.addEventListener('click', addBatchTag);
+    batchTagInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') addBatchTag(); });
 }
 
 // ── About dialog ────────────────────────────────────────
@@ -1823,6 +2304,17 @@ function getMailRows() {
 
 function handleMailKeys(e) {
     const rows = getMailRows();
+    const visible = _getVisibleMails();
+
+    // Ctrl+A / Cmd+A — select all visible
+    if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        e.preventDefault();
+        visible.forEach(m => selectedMailIds.add(m.id));
+        _updateRowCheckboxes();
+        _updateHeaderCheckbox();
+        _syncDetailPanel();
+        return;
+    }
 
     switch (e.key) {
         case 'ArrowDown': {
@@ -1830,14 +2322,33 @@ function handleMailKeys(e) {
             if (!rows.length) break;
             const sel = document.querySelector('.mail-table tr.selected');
             const idx = sel ? rows.indexOf(sel) : -1;
-            if (idx < rows.length - 1) {
-                const next = rows[idx + 1];
-                selectMail(parseInt(next.dataset.id));
-                next.scrollIntoView({ block: 'nearest', behavior: 'instant' });
-            } else if (idx === rows.length - 1) {
-                // At bottom — try next page
-                const nextBtn = document.getElementById('page-next');
-                if (nextBtn && !nextBtn.disabled) nextBtn.click();
+            if (e.shiftKey) {
+                // Extend selection downward
+                if (idx < rows.length - 1) {
+                    const next = rows[idx + 1];
+                    const nextId = parseInt(next.dataset.id);
+                    selectedMailIds.add(nextId);
+                    // Also keep current in set
+                    if (idx >= 0) selectedMailIds.add(parseInt(rows[idx].dataset.id));
+                    selectedMailId = nextId;
+                    _updateRowCheckboxes();
+                    _updateHeaderCheckbox();
+                    _syncDetailPanel();
+                    next.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+                }
+            } else {
+                if (idx < rows.length - 1) {
+                    const next = rows[idx + 1];
+                    const nextId = parseInt(next.dataset.id);
+                    selectedMailIds.clear();
+                    selectedMailIds.add(nextId);
+                    _anchorIdx = visible.findIndex(m => m.id === nextId);
+                    selectMail(nextId);
+                    next.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+                } else if (idx === rows.length - 1) {
+                    const nextBtn = document.getElementById('page-next');
+                    if (nextBtn && !nextBtn.disabled) nextBtn.click();
+                }
             }
             break;
         }
@@ -1846,14 +2357,32 @@ function handleMailKeys(e) {
             if (!rows.length) break;
             const sel = document.querySelector('.mail-table tr.selected');
             const idx = sel ? rows.indexOf(sel) : -1;
-            if (idx > 0) {
-                const prev = rows[idx - 1];
-                selectMail(parseInt(prev.dataset.id));
-                prev.scrollIntoView({ block: 'nearest', behavior: 'instant' });
-            } else if (idx === 0) {
-                // At top — try prev page
-                const prevBtn = document.getElementById('page-prev');
-                if (prevBtn && !prevBtn.disabled) prevBtn.click();
+            if (e.shiftKey) {
+                // Extend selection upward
+                if (idx > 0) {
+                    const prev = rows[idx - 1];
+                    const prevId = parseInt(prev.dataset.id);
+                    selectedMailIds.add(prevId);
+                    if (idx >= 0) selectedMailIds.add(parseInt(rows[idx].dataset.id));
+                    selectedMailId = prevId;
+                    _updateRowCheckboxes();
+                    _updateHeaderCheckbox();
+                    _syncDetailPanel();
+                    prev.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+                }
+            } else {
+                if (idx > 0) {
+                    const prev = rows[idx - 1];
+                    const prevId = parseInt(prev.dataset.id);
+                    selectedMailIds.clear();
+                    selectedMailIds.add(prevId);
+                    _anchorIdx = visible.findIndex(m => m.id === prevId);
+                    selectMail(prevId);
+                    prev.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+                } else if (idx === 0) {
+                    const prevBtn = document.getElementById('page-prev');
+                    if (prevBtn && !prevBtn.disabled) prevBtn.click();
+                }
             }
             break;
         }
@@ -1867,7 +2396,11 @@ function handleMailKeys(e) {
             e.preventDefault();
             if (rows.length) {
                 const first = rows[0];
-                selectMail(parseInt(first.dataset.id));
+                const firstId = parseInt(first.dataset.id);
+                selectedMailIds.clear();
+                selectedMailIds.add(firstId);
+                _anchorIdx = 0;
+                selectMail(firstId);
                 first.scrollIntoView({ block: 'nearest', behavior: 'instant' });
             }
             break;
@@ -1876,7 +2409,11 @@ function handleMailKeys(e) {
             e.preventDefault();
             if (rows.length) {
                 const last = rows[rows.length - 1];
-                selectMail(parseInt(last.dataset.id));
+                const lastId = parseInt(last.dataset.id);
+                selectedMailIds.clear();
+                selectedMailIds.add(lastId);
+                _anchorIdx = visible.length - 1;
+                selectMail(lastId);
                 last.scrollIntoView({ block: 'nearest', behavior: 'instant' });
             }
             break;

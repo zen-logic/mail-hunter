@@ -34,8 +34,11 @@ async def _ensure_folder(
     return cursor.lastrowid
 
 
-async def _is_duplicate(db: aiosqlite.Connection, server_id: int, parsed: dict) -> bool:
-    """Check if message already exists for this server (by message_id or content_hash)."""
+async def _is_duplicate(db: aiosqlite.Connection, server_id: int, parsed: dict):
+    """Check if message already exists for this server (by message_id or content_hash).
+
+    Returns the existing mail id (truthy) or None (falsy).
+    """
     mid = parsed.get("message_id")
     if mid:
         rows = await db.execute_fetchall(
@@ -43,7 +46,7 @@ async def _is_duplicate(db: aiosqlite.Connection, server_id: int, parsed: dict) 
             (server_id, mid),
         )
         if rows:
-            return True
+            return rows[0]["id"]
 
     chash = parsed.get("content_hash")
     if chash:
@@ -52,9 +55,9 @@ async def _is_duplicate(db: aiosqlite.Connection, server_id: int, parsed: dict) 
             (server_id, chash),
         )
         if rows:
-            return True
+            return rows[0]["id"]
 
-    return False
+    return None
 
 
 async def _insert_mail(
@@ -101,6 +104,15 @@ async def _insert_mail(
         )
 
     return mail_id
+
+
+async def _insert_tags(db: aiosqlite.Connection, mail_id: int, tags: list[str]):
+    """Insert tags for a mail. Ignores duplicates."""
+    for tag in tags:
+        await db.execute(
+            "INSERT OR IGNORE INTO tags (mail_id, tag) VALUES (?, ?)",
+            (mail_id, tag),
+        )
 
 
 def _is_mbox_file(file_path: str) -> bool:
@@ -153,7 +165,14 @@ async def run_import(
     last_mail_id = None
     total = len(raw_messages)
 
-    await broadcast({"type": "import_started", "filename": filename, "total": total, "server_id": server_id})
+    await broadcast(
+        {
+            "type": "import_started",
+            "filename": filename,
+            "total": total,
+            "server_id": server_id,
+        }
+    )
 
     for i, raw_bytes in enumerate(raw_messages):
         try:

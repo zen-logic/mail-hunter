@@ -7,7 +7,12 @@ from datetime import datetime, timezone
 from mail_hunter.db import open_connection, check_write_lock_requested
 from mail_hunter.services.parser import parse_message
 from mail_hunter.services.store import store_message
-from mail_hunter.services.importer import _ensure_folder, _is_duplicate, _insert_mail
+from mail_hunter.services.importer import (
+    _ensure_folder,
+    _is_duplicate,
+    _insert_mail,
+    _insert_tags,
+)
 from mail_hunter.services.dedup import recalculate_dup_counts
 from mail_hunter.ws import broadcast
 
@@ -15,6 +20,95 @@ logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 100
 MAX_RECONNECTS = 3
+
+# Gmail system folders to skip — labels on these messages are captured via
+# X-GM-LABELS when syncing All Mail (or the user's preferred folder).
+GMAIL_SKIP_FOLDERS = {
+    "Sent Mail",
+    "Important",
+    "Starred",
+    "Drafts",
+    "Spam",
+    "Bin",
+    "Trash",
+}
+
+# System label normalisation: raw backslash-prefixed -> clean name
+_GMAIL_SYSTEM_LABELS = {
+    "\\Inbox": "Inbox",
+    "\\Sent": "Sent",
+    "\\Important": "Important",
+    "\\Starred": "Starred",
+    "\\Draft": "Drafts",
+    "\\Trash": "Trash",
+    "\\Spam": "Spam",
+}
+
+
+def _normalise_label(label: str) -> str:
+    """Normalise a Gmail label: strip backslash prefix from system labels."""
+    result = _GMAIL_SYSTEM_LABELS.get(label)
+    if result:
+        return result
+    # Handle double-escaped backslashes from quoted IMAP responses
+    if label.startswith("\\\\"):
+        return _GMAIL_SYSTEM_LABELS.get("\\" + label[2:], label[1:])
+    return label
+
+
+def _tokenize_labels(raw: str) -> list[str]:
+    """Tokenize the content between X-GM-LABELS parentheses.
+
+    Handles quoted strings (may contain spaces) and bare tokens.
+    Example input: '\\Inbox "Legacy/2004" receipts'
+    Returns: ['\\Inbox', 'Legacy/2004', 'receipts']
+    """
+    tokens = []
+    i = 0
+    while i < len(raw):
+        if raw[i] == " ":
+            i += 1
+            continue
+        if raw[i] == '"':
+            # Quoted token — find matching close quote
+            end = raw.find('"', i + 1)
+            if end < 0:
+                end = len(raw)
+            tokens.append(raw[i + 1 : end])
+            i = end + 1
+        else:
+            # Bare token — up to next space
+            end = raw.find(" ", i)
+            if end < 0:
+                end = len(raw)
+            tokens.append(raw[i:end])
+            i = end
+    return tokens
+
+
+def _parse_gmail_labels(meta_line: bytes) -> list[str]:
+    """Extract normalised labels from a FETCH response metadata line.
+
+    Gmail returns something like:
+        b'1 (X-GM-LABELS (\\Inbox "Legacy/2004" receipts) UID 123 RFC822 {456})'
+    """
+    text = meta_line.decode("utf-8", errors="replace")
+    marker = "X-GM-LABELS ("
+    start = text.find(marker)
+    if start < 0:
+        return []
+    start += len(marker)
+    # Find matching closing paren
+    depth = 1
+    pos = start
+    while pos < len(text) and depth > 0:
+        if text[pos] == "(":
+            depth += 1
+        elif text[pos] == ")":
+            depth -= 1
+        pos += 1
+    inner = text[start : pos - 1]
+    return [_normalise_label(t) for t in _tokenize_labels(inner)]
 
 
 async def _save_sync_state(db, server_id, folder_name, uid_validity, last_uid):
@@ -42,6 +136,11 @@ def _connect(host: str, port: int, username: str, password: str, use_ssl: bool =
     else:
         conn = imaplib.IMAP4(host, port)
     conn.login(username, password)
+    # Refresh capabilities after login — Gmail only advertises X-GM-EXT-1 post-auth
+    typ, data = conn.capability()
+    if typ == "OK" and data:
+        conn.capabilities = tuple(data[0].upper().split())
+    conn._is_gmail = b"X-GM-EXT-1" in (conn.capabilities or ())
     return conn
 
 
@@ -122,15 +221,21 @@ def _fetch_uids_since(conn, folder: str, last_uid: int) -> tuple[int | None, lis
     return uid_validity, sorted(uids)
 
 
-def _fetch_message(conn, uid: int) -> bytes | None:
-    """Fetch raw RFC822 message by UID. Blocking."""
-    status, data = conn.uid("FETCH", str(uid), "(RFC822)")
+def _fetch_message(conn, uid: int) -> tuple[bytes | None, list[str]]:
+    """Fetch raw RFC822 message by UID. Returns (raw_bytes, gmail_labels). Blocking."""
+    fetch_items = (
+        "(RFC822 X-GM-LABELS)" if getattr(conn, "_is_gmail", False) else "(RFC822)"
+    )
+    status, data = conn.uid("FETCH", str(uid), fetch_items)
     if status != "OK" or not data or data[0] is None:
-        return None
+        return None, []
     # data[0] is a tuple: (b'UID FLAGS ...', raw_bytes)
     if isinstance(data[0], tuple) and len(data[0]) >= 2:
-        return data[0][1]
-    return None
+        labels = (
+            _parse_gmail_labels(data[0][0]) if getattr(conn, "_is_gmail", False) else []
+        )
+        return data[0][1], labels
+    return None, []
 
 
 async def test_connection(
@@ -142,13 +247,16 @@ async def test_connection(
             _connect, host, port, username, password, use_ssl
         )
         folders = await asyncio.to_thread(_list_folders, conn)
+        is_gmail = getattr(conn, "_is_gmail", False)
         await asyncio.to_thread(conn.logout)
-        return {"ok": True, "folders": folders}
+        return {"ok": True, "folders": folders, "is_gmail": is_gmail}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
-async def sync_server(server_id: int, server: dict, *, full: bool = False, start_folder: str | None = None):
+async def sync_server(
+    server_id: int, server: dict, *, full: bool = False, start_folder: str | None = None
+):
     """Full incremental sync for a server. Runs as background task."""
     if server_id in _active_syncs:
         await broadcast(
@@ -166,15 +274,11 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
     db = await open_connection()
 
     # Mark server as syncing so we can resume after restart
-    await db.execute(
-        "UPDATE servers SET syncing = 1 WHERE id = ?", (server_id,)
-    )
+    await db.execute("UPDATE servers SET syncing = 1 WHERE id = ?", (server_id,))
     await db.commit()
 
     if full:
-        await db.execute(
-            "DELETE FROM sync_state WHERE server_id = ?", (server_id,)
-        )
+        await db.execute("DELETE FROM sync_state WHERE server_id = ?", (server_id,))
         await db.commit()
     conn = None
     imported = 0
@@ -211,6 +315,33 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                 }
             )
             return
+
+        # Persist Gmail capability flag
+        is_gmail = getattr(conn, "_is_gmail", False)
+        await db.execute(
+            "UPDATE servers SET is_gmail = ? WHERE id = ?",
+            (1 if is_gmail else 0, server_id),
+        )
+        await db.commit()
+
+        # On Gmail, skip virtual system folders — labels are captured via X-GM-LABELS
+        if is_gmail:
+            original_count = len(folders)
+            folders = [
+                f
+                for f in folders
+                if not any(
+                    f.startswith(prefix) and f[len(prefix) :] in GMAIL_SKIP_FOLDERS
+                    for prefix in ("[Gmail]/", "[Google Mail]/")
+                )
+            ]
+            skipped_count = original_count - len(folders)
+            if skipped_count:
+                logger.info(
+                    "Gmail: skipped %d virtual folders, syncing %d",
+                    skipped_count,
+                    len(folders),
+                )
 
         # Reorder so start_folder is synced first
         if start_folder and start_folder in folders:
@@ -265,7 +396,9 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
 
                 logger.info(
                     "Sync %s/%s: last_uid=%d",
-                    server["name"], folder_name, saved_last_uid,
+                    server["name"],
+                    folder_name,
+                    saved_last_uid,
                 )
 
                 uid_validity, new_uids = await asyncio.to_thread(
@@ -292,13 +425,18 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
 
                 if not new_uids:
                     logger.info("Sync %s/%s: up to date", server["name"], folder_name)
-                    await _save_sync_state(db, server_id, folder_name, uid_validity, saved_last_uid)
+                    await _save_sync_state(
+                        db, server_id, folder_name, uid_validity, saved_last_uid
+                    )
                     folder_idx += 1
                     continue
 
                 logger.info(
                     "Sync %s/%s: %d new UIDs (from %d)",
-                    server["name"], folder_name, len(new_uids), new_uids[0],
+                    server["name"],
+                    folder_name,
+                    len(new_uids),
+                    new_uids[0],
                 )
 
                 folder_id = await _ensure_folder(db, server_id, folder_name)
@@ -328,9 +466,15 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
 
                     logger.info(
                         "Sync %s/%s [%d/%d]: fetching UID %d",
-                        server["name"], folder_name, i + 1, len(new_uids), uid,
+                        server["name"],
+                        folder_name,
+                        i + 1,
+                        len(new_uids),
+                        uid,
                     )
-                    raw_bytes = await asyncio.to_thread(_fetch_message, conn, uid)
+                    raw_bytes, gmail_labels = await asyncio.to_thread(
+                        _fetch_message, conn, uid
+                    )
                     if not raw_bytes:
                         logger.info("  UID %d: empty response, skipping", uid)
                         continue
@@ -338,24 +482,32 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                     parsed = parse_message(raw_bytes)
 
                     mail_data = None
-                    if await _is_duplicate(db, server_id, parsed):
+                    existing_id = await _is_duplicate(db, server_id, parsed)
+                    if existing_id:
                         skipped += 1
+                        if gmail_labels:
+                            await _insert_tags(db, existing_id, gmail_labels)
                         logger.info(
                             "  UID %d: duplicate (%d bytes), skipped",
-                            uid, len(raw_bytes),
+                            uid,
+                            len(raw_bytes),
                         )
                     else:
                         sha, path = store_message(raw_bytes)
                         mail_id = await _insert_mail(
                             db, server_id, folder_id, parsed, path, len(raw_bytes)
                         )
+                        if gmail_labels:
+                            await _insert_tags(db, mail_id, gmail_labels)
                         imported += 1
                         folder_count += 1
                         if parsed["message_id"]:
                             message_ids.append(parsed["message_id"])
                         logger.info(
                             "  UID %d: stored %d bytes, subject: %.60s",
-                            uid, len(raw_bytes), parsed["subject"] or "(none)",
+                            uid,
+                            len(raw_bytes),
+                            parsed["subject"] or "(none)",
                         )
                         mail_data = {
                             "id": mail_id,
@@ -373,11 +525,15 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
 
                     if check_write_lock_requested():
                         await db.commit()
-                        await _save_sync_state(db, server_id, folder_name, uid_validity, max_uid)
+                        await _save_sync_state(
+                            db, server_id, folder_name, uid_validity, max_uid
+                        )
                         await asyncio.sleep(0.2)
                     elif (imported + skipped) % BATCH_SIZE == 0:
                         await db.commit()
-                        await _save_sync_state(db, server_id, folder_name, uid_validity, max_uid)
+                        await _save_sync_state(
+                            db, server_id, folder_name, uid_validity, max_uid
+                        )
 
                     msg_out = {
                         "type": "sync_progress",
@@ -393,7 +549,9 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
                     await broadcast(msg_out)
 
                 await db.commit()
-                await _save_sync_state(db, server_id, folder_name, uid_validity, max_uid)
+                await _save_sync_state(
+                    db, server_id, folder_name, uid_validity, max_uid
+                )
                 if check_write_lock_requested():
                     await asyncio.sleep(0.2)
                 reconnects = 0  # successful folder resets counter
@@ -402,7 +560,9 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
             except imaplib.IMAP4.abort as e:
                 logger.warning(
                     "Sync %s/%s: connection lost (%s), reconnecting...",
-                    server["name"], folder_name, e,
+                    server["name"],
+                    folder_name,
+                    e,
                 )
                 reconnects += 1
                 if reconnects > MAX_RECONNECTS:
@@ -452,7 +612,10 @@ async def sync_server(server_id: int, server: dict, *, full: bool = False, start
         sync_cleared = True
 
     except asyncio.CancelledError:
-        logger.info("Sync for server %d interrupted by shutdown, will resume on restart", server_id)
+        logger.info(
+            "Sync for server %d interrupted by shutdown, will resume on restart",
+            server_id,
+        )
         sync_cleared = False
     except Exception as e:
         logger.exception("Sync failed for server %d, will retry on restart", server_id)

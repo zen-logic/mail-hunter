@@ -4,4 +4,5 @@ aiosqlite
 python-multipart
 httpx
 zstandard
+cryptography
 ruff
