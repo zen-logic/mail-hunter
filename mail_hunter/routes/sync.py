@@ -11,23 +11,28 @@ from mail_hunter.services.imap import (
     sync_server,
     cancel_sync,
     is_syncing,
+    is_any_syncing,
 )
 from mail_hunter.services.backfill import (
     backfill_labels,
     cancel_backfill,
     is_backfilling,
 )
+from mail_hunter.ws import broadcast
 
 
 async def sync_endpoint(request: Request):
     """GET returns sync status, POST starts a sync."""
     server_id = request.path_params["server_id"]
+    db = await get_db()
 
     if request.method == "GET":
-        return JSONResponse({"syncing": is_syncing(server_id)})
+        row = await db.execute_fetchall(
+            "SELECT 1 FROM sync_queue WHERE server_id = ?", (server_id,)
+        )
+        return JSONResponse({"syncing": is_syncing(server_id), "queued": bool(row)})
 
-    # POST — start sync
-    db = await get_db()
+    # POST — start or queue sync
     rows = await db.execute_fetchall(
         "SELECT id, name, host, port, username, password, use_ssl, protocol FROM servers WHERE id = ?",
         (server_id,),
@@ -43,11 +48,30 @@ async def sync_endpoint(request: Request):
             {"error": "import-only server, cannot sync"}, status_code=400
         )
 
-    if is_syncing(server_id):
-        return JSONResponse({"error": "sync already in progress"}, status_code=409)
-
     full = request.query_params.get("full") == "1"
     purge = request.query_params.get("purge") == "1"
+    start_folder = request.query_params.get("folder")
+
+    if is_any_syncing():
+        # Queue the sync — only one sync at a time globally
+        request_write_lock()
+        await db.execute(
+            "INSERT INTO sync_queue (server_id, folder, full, purge) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(server_id) DO UPDATE SET "
+            "folder=excluded.folder, full=excluded.full, purge=excluded.purge, "
+            "created_at=datetime('now')",
+            (server_id, start_folder, int(full), int(purge)),
+        )
+        await db.commit()
+        await broadcast(
+            {
+                "type": "sync_queued",
+                "server_id": server_id,
+                "server_name": server["name"],
+            }
+        )
+        return JSONResponse({"ok": True, "queued": True})
 
     if purge:
         request_write_lock()
@@ -66,10 +90,24 @@ async def sync_endpoint(request: Request):
                 pass
         full = True  # purge implies full
 
-    start_folder = request.query_params.get("folder")
     asyncio.create_task(
         sync_server(server_id, server, full=full, start_folder=start_folder)
     )
+    return JSONResponse({"ok": True})
+
+
+async def dequeue_sync(request: Request):
+    """Remove a queued sync for a server."""
+    server_id = request.path_params["server_id"]
+    db = await get_db()
+    request_write_lock()
+    cursor = await db.execute(
+        "DELETE FROM sync_queue WHERE server_id = ?", (server_id,)
+    )
+    await db.commit()
+    if cursor.rowcount == 0:
+        return JSONResponse({"error": "nothing queued"}, status_code=404)
+    await broadcast({"type": "sync_dequeued", "server_id": server_id})
     return JSONResponse({"ok": True})
 
 

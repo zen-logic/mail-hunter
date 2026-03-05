@@ -36,11 +36,13 @@ from mail_hunter.routes.import_mail import import_upload
 from mail_hunter.routes.sync import (
     sync_endpoint,
     stop_sync,
+    dequeue_sync,
     test_server_connection,
     backfill_labels_endpoint,
     stop_backfill,
 )
-from mail_hunter.services.imap import sync_server
+from mail_hunter.db import request_write_lock
+from mail_hunter.services.imap import sync_server, _start_queued_sync
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -81,18 +83,54 @@ async def on_startup():
         "SELECT id, name, host, port, username, password, use_ssl, protocol "
         "FROM servers WHERE syncing = 1"
     )
+    first_started = False
     for r in rows:
         server = dict(r)
         if server["protocol"] == "import":
-            # Can't sync import-only servers, clear the flag
             await db.execute(
                 "UPDATE servers SET syncing = 0 WHERE id = ?", (server["id"],)
             )
             await db.commit()
             continue
-        server["password"] = decrypt_password(server["password"])
-        logger.info("Resuming sync for server %s (id=%d)", server["name"], server["id"])
-        asyncio.create_task(sync_server(server["id"], server))
+        if not first_started:
+            # Start the first one, queue the rest
+            server["password"] = decrypt_password(server["password"])
+            logger.info(
+                "Resuming sync for server %s (id=%d)", server["name"], server["id"]
+            )
+            asyncio.create_task(sync_server(server["id"], server))
+            first_started = True
+        else:
+            # Queue remaining servers — they'll chain-start on completion
+            logger.info(
+                "Queuing sync for server %s (id=%d) on startup",
+                server["name"],
+                server["id"],
+            )
+            await db.execute(
+                "UPDATE servers SET syncing = 0 WHERE id = ?", (server["id"],)
+            )
+            request_write_lock()
+            await db.execute(
+                "INSERT INTO sync_queue (server_id) VALUES (?) "
+                "ON CONFLICT(server_id) DO NOTHING",
+                (server["id"],),
+            )
+            await db.commit()
+
+    # If nothing was resumed, start the oldest queued sync
+    if not first_started:
+        q_rows = await db.execute_fetchall(
+            "SELECT server_id, folder, full, purge FROM sync_queue "
+            "ORDER BY created_at ASC LIMIT 1"
+        )
+        if q_rows:
+            queue_row = dict(q_rows[0])
+            sid = queue_row["server_id"]
+            await db.execute("DELETE FROM sync_queue WHERE server_id = ?", (sid,))
+            await db.commit()
+            logger.info("Starting queued sync for server %d on startup", sid)
+            await _start_queued_sync(sid, queue_row)
 
 
 async def on_shutdown():
@@ -105,6 +143,7 @@ routes = [
     # Server sub-routes (more specific paths first)
     Route("/api/servers/{server_id:int}/sync", sync_endpoint, methods=["GET", "POST"]),
     Route("/api/servers/{server_id:int}/sync/cancel", stop_sync, methods=["POST"]),
+    Route("/api/servers/{server_id:int}/sync/queue", dequeue_sync, methods=["DELETE"]),
     Route(
         "/api/servers/{server_id:int}/backfill",
         backfill_labels_endpoint,
@@ -116,7 +155,11 @@ routes = [
     Route(
         "/api/servers/{server_id:int}/test", test_server_connection, methods=["POST"]
     ),
-    Route("/api/servers/{server_id:int}/folders", delete_folder_messages, methods=["DELETE"]),
+    Route(
+        "/api/servers/{server_id:int}/folders",
+        delete_folder_messages,
+        methods=["DELETE"],
+    ),
     Route("/api/servers/{server_id:int}/mails", list_mails, methods=["GET"]),
     # Server CRUD
     Route("/api/servers", list_servers, methods=["GET"]),

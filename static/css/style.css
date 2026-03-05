@@ -455,6 +455,16 @@ body {
     white-space: nowrap;
 }
 
+.queued-badge {
+    background: var(--color-primary);
+    color: #fff;
+    cursor: pointer;
+}
+
+.queued-badge:hover {
+    filter: brightness(1.2);
+}
+
 .server-badge {
     font-size: var(--font-size-xs);
     padding: 0.1rem 0.35rem;

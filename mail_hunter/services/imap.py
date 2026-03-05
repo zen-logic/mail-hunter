@@ -5,6 +5,7 @@ import ssl
 from datetime import datetime, timezone
 
 from mail_hunter.db import open_connection, check_write_lock_requested
+from mail_hunter.config import decrypt_password
 from mail_hunter.services.parser import parse_message
 from mail_hunter.services.store import store_message
 from mail_hunter.services.importer import (
@@ -272,14 +273,6 @@ async def sync_server(
     _cancel_requested.discard(server_id)
 
     db = await open_connection()
-
-    # Mark server as syncing so we can resume after restart
-    await db.execute("UPDATE servers SET syncing = 1 WHERE id = ?", (server_id,))
-    await db.commit()
-
-    if full:
-        await db.execute("DELETE FROM sync_state WHERE server_id = ?", (server_id,))
-        await db.commit()
     conn = None
     imported = 0
     skipped = 0
@@ -288,6 +281,14 @@ async def sync_server(
     sync_cleared = False
 
     try:
+        # Mark server as syncing so we can resume after restart
+        await db.execute("UPDATE servers SET syncing = 1 WHERE id = ?", (server_id,))
+        await db.commit()
+
+        if full:
+            await db.execute("DELETE FROM sync_state WHERE server_id = ?", (server_id,))
+            await db.commit()
+
         await broadcast(
             {
                 "type": "sync_started",
@@ -630,7 +631,7 @@ async def sync_server(
     finally:
         if conn:
             try:
-                await asyncio.to_thread(conn.logout)
+                await asyncio.wait_for(asyncio.to_thread(conn.logout), timeout=3)
             except Exception:
                 pass
         if sync_cleared:
@@ -645,6 +646,73 @@ async def sync_server(
         _active_syncs.discard(server_id)
         _cancel_requested.discard(server_id)
 
+        # Check for next queued sync (any server, oldest first)
+        if sync_cleared:
+            try:
+                q_db = await open_connection()
+                try:
+                    q_rows = await q_db.execute_fetchall(
+                        "SELECT server_id, folder, full, purge FROM sync_queue "
+                        "ORDER BY created_at ASC LIMIT 1",
+                    )
+                    if q_rows:
+                        queue_row = dict(q_rows[0])
+                        next_sid = queue_row["server_id"]
+                        await q_db.execute(
+                            "DELETE FROM sync_queue WHERE server_id = ?",
+                            (next_sid,),
+                        )
+                        await q_db.commit()
+                finally:
+                    await q_db.close()
+                if q_rows:
+                    await broadcast({"type": "sync_dequeued", "server_id": next_sid})
+                    await _start_queued_sync(next_sid, queue_row)
+            except Exception:
+                logger.exception("Failed to start queued sync from queue")
+
+
+async def _start_queued_sync(server_id: int, queue_row: dict):
+    """Load server creds and start a sync from queued params."""
+    from pathlib import Path
+
+    db = await open_connection()
+    try:
+        rows = await db.execute_fetchall(
+            "SELECT id, name, host, port, username, password, use_ssl, protocol "
+            "FROM servers WHERE id = ?",
+            (server_id,),
+        )
+        if not rows:
+            return
+        server = dict(rows[0])
+        server["password"] = decrypt_password(server["password"])
+
+        full = bool(queue_row["full"])
+        purge = bool(queue_row["purge"])
+        start_folder = queue_row["folder"]
+
+        if purge:
+            raw_rows = await db.execute_fetchall(
+                "SELECT raw_path FROM mails WHERE server_id = ? AND raw_path IS NOT NULL",
+                (server_id,),
+            )
+            await db.execute("DELETE FROM mails WHERE server_id = ?", (server_id,))
+            await db.execute("DELETE FROM folders WHERE server_id = ?", (server_id,))
+            await db.commit()
+            for r in raw_rows:
+                try:
+                    Path(r["raw_path"]).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            full = True
+    finally:
+        await db.close()
+
+    asyncio.create_task(
+        sync_server(server_id, server, full=full, start_folder=start_folder)
+    )
+
 
 def cancel_sync(server_id: int):
     """Request cancellation of an active sync."""
@@ -653,3 +721,7 @@ def cancel_sync(server_id: int):
 
 def is_syncing(server_id: int) -> bool:
     return server_id in _active_syncs
+
+
+def is_any_syncing() -> bool:
+    return len(_active_syncs) > 0

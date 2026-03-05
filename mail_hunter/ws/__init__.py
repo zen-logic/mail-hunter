@@ -39,6 +39,11 @@ async def broadcast(msg: dict):
             _sync_state.pop(server_id, None)
         else:
             _sync_state[server_id] = msg
+    if server_id is not None and msg_type in ("sync_queued", "sync_dequeued"):
+        if msg_type == "sync_dequeued":
+            _sync_state.pop(f"q-{server_id}", None)
+        else:
+            _sync_state[f"q-{server_id}"] = msg
     if server_id is not None and msg_type.startswith("backfill_"):
         if msg_type in ("backfill_completed", "backfill_error", "backfill_cancelled"):
             _sync_state.pop(f"bf-{server_id}", None)

@@ -140,6 +140,18 @@ CREATE TABLE IF NOT EXISTS sync_state (
 )
 """
 
+SYNC_QUEUE_TABLE = """
+CREATE TABLE IF NOT EXISTS sync_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    folder TEXT,
+    full INTEGER NOT NULL DEFAULT 0,
+    purge INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(server_id)
+)
+"""
+
 INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_mails_server_id ON mails(server_id)",
     "CREATE INDEX IF NOT EXISTS idx_mails_message_id ON mails(message_id)",
@@ -164,6 +176,7 @@ async def init_db(db: aiosqlite.Connection):
         except Exception:
             pass  # column already exists
     await db.execute(SYNC_STATE_TABLE)
+    await db.execute(SYNC_QUEUE_TABLE)
     for idx_sql in INDEXES:
         await db.execute(idx_sql)
     await db.commit()

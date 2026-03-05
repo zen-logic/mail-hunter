@@ -345,8 +345,9 @@ function handleWSMessage(msg) {
             break;
         case 'sync_started':
             ActivityLog.add(`Sync started: ${msg.server_name || 'server'}`);
-            syncingServerId = msg.server_id;
-            renderSyncStatus(`Syncing ${msg.server_name || 'server'}...`);
+            syncingServerIds.add(msg.server_id);
+            queuedServerIds.delete(msg.server_id);
+            renderSyncStatus(`Syncing ${msg.server_name || 'server'}...`, msg.server_id);
             loadServers();
             if (msg.server_id === selectedServerId) {
                 currentPage = 0;
@@ -360,8 +361,8 @@ function handleWSMessage(msg) {
             if (msg.server_id === selectedServerId) renderServerDetail();
             break;
         case 'sync_progress': {
-            if (msg.server_id && syncingServerId !== msg.server_id) {
-                syncingServerId = msg.server_id;
+            if (msg.server_id && !syncingServerIds.has(msg.server_id)) {
+                syncingServerIds.add(msg.server_id);
                 renderServers(allServers);
             }
             let statusText = `Syncing: ${msg.folder}`;
@@ -371,7 +372,7 @@ function handleWSMessage(msg) {
                 statusText += ` — ${msg.count} of ${msg.total} [new] ${existing} [existing]`;
                 logDetail = `Sync: ${msg.folder} — ${msg.count} of ${msg.total} new`;
             }
-            renderSyncStatus(statusText);
+            renderSyncStatus(statusText, msg.server_id);
             if (msg.count && (msg.count === 1 || msg.count % 50 === 0 || msg.count === msg.total)) {
                 ActivityLog.add(logDetail);
             }
@@ -386,9 +387,9 @@ function handleWSMessage(msg) {
         }
         case 'sync_completed':
             ActivityLog.add(`Sync complete: ${msg.imported} imported, ${msg.skipped} skipped${msg.errors ? ', ' + msg.errors + ' errors' : ''}`);
-            syncingServerId = null;
+            syncingServerIds.delete(msg.server_id);
             if (fullSyncServerId === msg.server_id) fullSyncServerId = null;
-            renderSyncStatus(null);
+            if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
             loadStats();
             loadServers().then(() => {
                 if (msg.server_id === selectedServerId) {
@@ -399,9 +400,9 @@ function handleWSMessage(msg) {
             break;
         case 'sync_cancelled':
             ActivityLog.add(`Sync cancelled (${msg.imported} imported before cancel)`);
-            syncingServerId = null;
+            syncingServerIds.delete(msg.server_id);
             if (fullSyncServerId === msg.server_id) fullSyncServerId = null;
-            renderSyncStatus(null);
+            if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
             loadServers();
             if (msg.server_id === selectedServerId) {
                 loadMails();
@@ -410,8 +411,8 @@ function handleWSMessage(msg) {
             break;
         case 'sync_error':
             ActivityLog.add(`Sync error: ${msg.error}`);
-            syncingServerId = null;
-            renderSyncStatus(null);
+            syncingServerIds.delete(msg.server_id);
+            if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
             renderServers(allServers);
             if (msg.server_id === selectedServerId) renderServerDetail();
             break;
@@ -459,6 +460,17 @@ function handleWSMessage(msg) {
             renderSyncStatus(null);
             loadServers();
             break;
+        case 'sync_queued':
+            ActivityLog.add(`Sync queued: ${msg.server_name || 'server'}`);
+            queuedServerIds.add(msg.server_id);
+            renderServers(allServers);
+            if (msg.server_id === selectedServerId) renderServerDetail();
+            break;
+        case 'sync_dequeued':
+            queuedServerIds.delete(msg.server_id);
+            renderServers(allServers);
+            if (msg.server_id === selectedServerId) renderServerDetail();
+            break;
         default:
             if (msg.message) ActivityLog.add(msg.message);
             break;
@@ -487,26 +499,30 @@ async function loadStats() {
 
 // ── Sync status ─────────────────────────────────────────
 
-let syncingServerId = null;
+const syncingServerIds = new Set();
+let _statusBarSyncId = null;
 let fullSyncServerId = null;
 let backfillingServerId = null;
+const queuedServerIds = new Set();
 const statusActivity = document.getElementById('status-activity');
 
-function renderSyncStatus(detail) {
+function renderSyncStatus(detail, serverId) {
     if (!detail) {
+        _statusBarSyncId = null;
         if (!backfillingServerId) {
             statusActivity.innerHTML = '<span class="status-idle">Idle</span>';
         }
         return;
     }
+    if (serverId != null) _statusBarSyncId = serverId;
     statusActivity.innerHTML = `
         <span class="status-sync-text">${esc(detail)}</span>
         <button class="btn btn-sm status-cancel-btn" id="status-cancel-sync">Cancel</button>
     `;
     document.getElementById('status-cancel-sync')?.addEventListener('click', async () => {
-        if (syncingServerId) {
+        if (_statusBarSyncId) {
             try {
-                await fetch(`/api/servers/${syncingServerId}/sync/cancel`, { method: 'POST' });
+                await fetch(`/api/servers/${_statusBarSyncId}/sync/cancel`, { method: 'POST' });
             } catch (err) {
                 console.error('Cancel failed:', err);
             }
@@ -516,7 +532,7 @@ function renderSyncStatus(detail) {
 
 function renderBackfillStatus(detail) {
     if (!detail) {
-        if (!syncingServerId) {
+        if (syncingServerIds.size === 0) {
             statusActivity.innerHTML = '<span class="status-idle">Idle</span>';
         }
         return;
@@ -1228,7 +1244,16 @@ function renderServers(servers) {
     let html = '';
     for (const s of filtered) {
         const sel = s.id === selectedServerId ? ' selected' : '';
-        const syncBadge = s.id === syncingServerId ? '<span class="sync-badge">syncing</span>' : '';
+        const isSyncing = syncingServerIds.has(s.id);
+        const isQueued = queuedServerIds.has(s.id);
+        let syncBadge = '';
+        if (isSyncing && isQueued) {
+            syncBadge = '<span class="sync-badge">syncing</span> <span class="sync-badge queued-badge" data-dequeue="' + s.id + '">queued</span>';
+        } else if (isSyncing) {
+            syncBadge = '<span class="sync-badge">syncing</span>';
+        } else if (isQueued) {
+            syncBadge = '<span class="sync-badge queued-badge" data-dequeue="' + s.id + '">queued</span>';
+        }
         const serverKey = `srv:${s.id}`;
         const isCollapsed = collapsed.has(serverKey);
         const hasFolders = s.folders && s.folders.length > 0;
@@ -1264,6 +1289,17 @@ function renderServers(servers) {
                 loadServers();
             }
             selectFolder(el.dataset.folder);
+        });
+    });
+    container.querySelectorAll('[data-dequeue]').forEach(el => {
+        el.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const sid = parseInt(el.dataset.dequeue);
+            try {
+                await fetch(`/api/servers/${sid}/sync/queue`, { method: 'DELETE' });
+            } catch (err) {
+                console.error('Dequeue failed:', err);
+            }
         });
     });
 }
@@ -1324,7 +1360,7 @@ async function renderServerDetail() {
         const folderObj = (server.folders || []).find(f => f.name === selectedFolder);
         const msgCount = folderObj ? (folderObj.count || 0) : 0;
         const isImportOnly = !server.host;
-        const syncing = syncingServerId === server.id;
+        const syncing = syncingServerIds.has(server.id);
         container.innerHTML = `
             <div class="detail-section">
                 <div class="detail-subject">${esc(leafName)}</div>
@@ -1888,7 +1924,7 @@ function renderDetail(mail) {
             <h3>Headers</h3>
             <div class="detail-field"><span class="label">From</span><span class="value">${esc(mail.from_addr || '')}</span></div>
             <div class="detail-field"><span class="label">To</span><span class="value">${esc(mail.to_addr || '')}</span></div>
-            ${mail.cc_addr ? `<div class="detail-field"><span class="label">CC</span><span class="value">${esc(mail.cc_addr)}</span></div>` : ''}
+            <div class="detail-field"><span class="label">CC</span><span class="value">${esc(mail.cc_addr || '')}</span></div>
             <div class="detail-field"><span class="label">Date</span><span class="value">${formatDate(mail.date)}</span></div>
             <div class="detail-field"><span class="label">Size</span><span class="value">${formatSize(mail.size)}</span></div>
         </div>
