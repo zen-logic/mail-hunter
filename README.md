@@ -2,7 +2,7 @@
 
 > **WARNING: This project is under active development and is NOT suitable for production deployment.**
 
-Email archiving and search tool for managing remote mailboxes and local mail archives. This is not an email client — it is an archiving server only.
+Email archiving and search tool for managing remote mailboxes and local mail archives. This is not an email client - it is an archiving server only.
 
 ## Features
 
