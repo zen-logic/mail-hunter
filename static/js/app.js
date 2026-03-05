@@ -1373,6 +1373,13 @@ function renderServers(servers) {
         el.addEventListener('click', async (e) => {
             e.stopPropagation();
             const sid = parseInt(el.dataset.dequeue);
+            const srv = allServers.find(x => x.id === sid);
+            const name = srv ? srv.name : `Server ${sid}`;
+            const ok = await showConfirm(
+                `Cancel the queued sync for "${name}"?`,
+                { title: 'Cancel Queued Sync', okLabel: 'Cancel Sync', okClass: 'btn-danger' }
+            );
+            if (!ok) return;
             try {
                 await fetch(`/api/servers/${sid}/sync/queue`, { method: 'DELETE' });
             } catch (err) {

@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import email
 import email.policy
 import logging
+import re
 from pathlib import Path
 
 from starlette.requests import Request
@@ -620,6 +622,24 @@ async def get_mail_preview(request: Request):
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
     body_text = _extract_body(msg)
     body_html = _extract_body_html(msg)
+
+    # Resolve cid: references to inline data URIs
+    if body_html:
+        cid_map = {}
+        for part in msg.walk():
+            cid = part.get("Content-ID", "").strip("<> ")
+            if cid:
+                data = part.get_payload(decode=True)
+                if data:
+                    ct = part.get_content_type()
+                    b64 = base64.b64encode(data).decode("ascii")
+                    cid_map[cid] = f"data:{ct};base64,{b64}"
+        if cid_map:
+            def replace_cid(m):
+                ref = m.group(1)
+                return cid_map.get(ref, m.group(0))
+            body_html = re.sub(r'cid:([^\s"\'><]+)', replace_cid, body_html)
+
     raw_source = raw_bytes.decode("utf-8", errors="replace")
 
     return JSONResponse(
