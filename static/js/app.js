@@ -2042,6 +2042,7 @@ function renderDetail(mail) {
             <div class="detail-btn-group">
                 ${mail.raw_path ? `<button class="btn" id="btn-view-message">View Message</button>` : ''}
                 ${mail.raw_path ? `<button class="btn" id="btn-download-eml">Download EML</button>` : ''}
+                ${mail.raw_path ? `<button class="btn" id="btn-export-zip">Export</button>` : ''}
                 <button class="btn" id="btn-toggle-hold">${mail.legal_hold ? 'Release Hold' : 'Legal Hold'}</button>
                 <button class="btn btn-danger" id="btn-delete-mail"${mail.legal_hold ? ' disabled title="Message is on legal hold"' : ''}>Delete Message</button>
             </div>
@@ -2077,6 +2078,29 @@ function renderDetail(mail) {
     // Download EML
     document.getElementById('btn-download-eml')?.addEventListener('click', () => {
         window.location.href = `/api/mails/${mail.id}/raw`;
+    });
+
+    // Export as zip
+    document.getElementById('btn-export-zip')?.addEventListener('click', async () => {
+        try {
+            const resp = await fetch('/api/mails/batch/export', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mail_ids: [mail.id] }),
+            });
+            if (!resp.ok) return;
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'mail-hunter-export.zip';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('Export failed:', err);
+        }
     });
 
     // Attachment downloads
@@ -2185,6 +2209,7 @@ function renderMultiSelect() {
         <div class="detail-section">
             <h3>Batch Actions</h3>
             <div class="detail-btn-group">
+                <button class="btn" id="btn-batch-export">Export</button>
                 <button class="btn" id="btn-batch-hold">Legal Hold</button>
                 <button class="btn" id="btn-batch-release">Release Hold</button>
                 <button class="btn btn-danger" id="btn-batch-delete">Delete</button>
@@ -2226,6 +2251,30 @@ function renderMultiSelect() {
     };
     document.getElementById('btn-batch-hold')?.addEventListener('click', () => batchHoldHandler(1));
     document.getElementById('btn-batch-release')?.addEventListener('click', () => batchHoldHandler(0));
+
+    // Batch export
+    document.getElementById('btn-batch-export')?.addEventListener('click', async () => {
+        try {
+            const resp = await fetch('/api/mails/batch/export', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mail_ids: [...selectedMailIds] }),
+            });
+            if (!resp.ok) return;
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'mail-hunter-export.zip';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            ActivityLog.add(`Exported ${selectedMailIds.size} messages as zip`);
+        } catch (err) {
+            console.error('Batch export failed:', err);
+        }
+    });
 
     // Batch delete
     document.getElementById('btn-batch-delete')?.addEventListener('click', async () => {

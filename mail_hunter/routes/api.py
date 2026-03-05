@@ -2,8 +2,10 @@ import asyncio
 import base64
 import email
 import email.policy
+import io
 import logging
 import re
+import zipfile
 from pathlib import Path
 
 from starlette.requests import Request
@@ -800,3 +802,41 @@ async def toggle_hold(request: Request):
 
 async def get_version(request: Request):
     return JSONResponse({"version": __version__})
+
+
+async def batch_export(request: Request):
+    """Export multiple mails as a zip of .eml files."""
+    data = await request.json()
+    mail_ids = data.get("mail_ids", [])
+    if not mail_ids:
+        return JSONResponse({"error": "mail_ids required"}, status_code=400)
+
+    db = await get_db()
+    placeholders = ",".join("?" for _ in mail_ids)
+    rows = await db.execute_fetchall(
+        f"SELECT id, subject, raw_path FROM mails WHERE id IN ({placeholders})",
+        mail_ids,
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        for r in rows:
+            if not r["raw_path"]:
+                continue
+            try:
+                raw = read_raw(r["raw_path"])
+            except FileNotFoundError:
+                continue
+            subject = r["subject"] or "message"
+            safe_name = "".join(
+                c if c.isalnum() or c in " -_." else "_" for c in subject
+            )[:50]
+            zf.writestr(f"{safe_name}_{r['id']}.eml", raw)
+
+    return Response(
+        buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="mail-hunter-export.zip"'
+        },
+    )
