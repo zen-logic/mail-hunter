@@ -915,6 +915,10 @@ function showServerForm(existing) {
                 <input class="modal-input" id="sf-port" type="number" placeholder="993" value="${existing?.port || 993}">
                 <input class="modal-input" id="sf-username" placeholder="user@example.com" value="${esc(existing?.username || '')}">
                 <input class="modal-input" id="sf-password" type="password" placeholder="${existing ? '(unchanged)' : 'Password'}">
+                ${!existing || existing.host ? `<div class="settings-auto-sync-row">
+                    <label class="settings-checkbox"><input type="checkbox" id="sf-sync-enabled" ${!existing || existing.sync_enabled !== false ? 'checked' : ''}> Auto Sync</label>
+                    <label class="settings-interval">every <input class="modal-input modal-input-narrow" id="sf-sync-interval" type="number" min="0" value="${existing?.sync_interval ?? 15}"> min</label>
+                </div>` : ''}
             </div>
             <div class="settings-server-form-actions">
                 <button class="btn btn-sm" id="sf-cancel">Cancel</button>
@@ -928,12 +932,15 @@ function showServerForm(existing) {
     });
 
     document.getElementById('sf-save').addEventListener('click', async () => {
+        const syncEl = document.getElementById('sf-sync-enabled');
         const data = {
             name: document.getElementById('sf-name').value.trim(),
             host: document.getElementById('sf-host').value.trim(),
             port: parseInt(document.getElementById('sf-port').value) || 993,
             username: document.getElementById('sf-username').value.trim(),
             password: document.getElementById('sf-password').value,
+            sync_enabled: syncEl ? syncEl.checked : true,
+            sync_interval: parseInt(document.getElementById('sf-sync-interval')?.value) || 15,
         };
         if (!existing && (!data.host || !data.username)) return;
         if (!data.name) data.name = data.host;

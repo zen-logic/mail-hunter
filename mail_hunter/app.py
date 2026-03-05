@@ -46,6 +46,7 @@ from mail_hunter.routes.sync import (
 )
 from mail_hunter.db import request_write_lock
 from mail_hunter.services.imap import sync_server, _start_queued_sync
+from mail_hunter.services.auto_sync import start_auto_sync, stop_auto_sync
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -149,8 +150,11 @@ async def on_startup():
             }
         )
 
+    start_auto_sync()
+
 
 async def on_shutdown():
+    stop_auto_sync()
     await close_db()
 
 

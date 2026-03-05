@@ -120,6 +120,11 @@ MIGRATIONS = [
         "is_gmail",
         "ALTER TABLE servers ADD COLUMN is_gmail INTEGER NOT NULL DEFAULT 0",
     ),
+    (
+        "servers",
+        "sync_interval",
+        "ALTER TABLE servers ADD COLUMN sync_interval INTEGER NOT NULL DEFAULT 15",
+    ),
     # attachments columns
     (
         "attachments",

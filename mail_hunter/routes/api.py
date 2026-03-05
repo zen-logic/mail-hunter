@@ -57,7 +57,7 @@ def _sort_params(request):
 async def list_servers(request: Request):
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT id, name, host, port, username, last_sync, is_gmail FROM servers ORDER BY name"
+        "SELECT id, name, host, port, username, last_sync, is_gmail, sync_enabled, sync_interval FROM servers ORDER BY name"
     )
     servers = []
     for r in rows:
@@ -76,6 +76,8 @@ async def list_servers(request: Request):
                 "username": r["username"],
                 "last_sync": r["last_sync"],
                 "is_gmail": bool(r["is_gmail"]),
+                "sync_enabled": bool(r["sync_enabled"]),
+                "sync_interval": r["sync_interval"],
                 "folders": [{"name": f["name"], "count": f["count"]} for f in folders],
             }
         )
@@ -122,11 +124,20 @@ async def update_server(request: Request):
     if not row:
         return JSONResponse({"error": "server not found"}, status_code=404)
 
+    sync_enabled = 1 if data.get("sync_enabled", True) else 0
+    try:
+        sync_interval = max(0, int(data.get("sync_interval", 15)))
+    except (ValueError, TypeError):
+        sync_interval = 15
+
     if row[0]["protocol"] == "import":
         # Import servers: only the name can be updated
         if not name:
             return JSONResponse({"error": "name required"}, status_code=400)
-        await db.execute("UPDATE servers SET name=? WHERE id=?", (name, server_id))
+        await db.execute(
+            "UPDATE servers SET name=? WHERE id=?",
+            (name, server_id),
+        )
     else:
         if not host or not username:
             return JSONResponse(
@@ -134,20 +145,22 @@ async def update_server(request: Request):
             )
         if password:
             await db.execute(
-                "UPDATE servers SET name=?, host=?, port=?, username=?, password=? WHERE id=?",
+                "UPDATE servers SET name=?, host=?, port=?, username=?, password=?, sync_enabled=?, sync_interval=? WHERE id=?",
                 (
                     name or host,
                     host,
                     port,
                     username,
                     encrypt_password(password),
+                    sync_enabled,
+                    sync_interval,
                     server_id,
                 ),
             )
         else:
             await db.execute(
-                "UPDATE servers SET name=?, host=?, port=?, username=? WHERE id=?",
-                (name or host, host, port, username, server_id),
+                "UPDATE servers SET name=?, host=?, port=?, username=?, sync_enabled=?, sync_interval=? WHERE id=?",
+                (name or host, host, port, username, sync_enabled, sync_interval, server_id),
             )
     await db.commit()
     return JSONResponse({"ok": True})

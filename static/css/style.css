@@ -1205,6 +1205,35 @@ body {
     grid-column: 1 / -1;
 }
 
+.settings-auto-sync-row {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.settings-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.85rem;
+    color: var(--color-text);
+    cursor: pointer;
+}
+
+.settings-interval {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.85rem;
+    color: var(--color-text);
+}
+
+.modal-input-narrow {
+    width: 4rem;
+    text-align: center;
+}
+
 .settings-server-form-actions {
     display: flex;
     gap: 0.3rem;
