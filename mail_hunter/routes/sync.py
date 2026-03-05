@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 
 from starlette.requests import Request
@@ -10,8 +11,11 @@ from mail_hunter.services.imap import (
     test_connection,
     sync_server,
     cancel_sync,
-    is_syncing,
+    claim_sync,
+    clear_auto_sync_flag,
+    is_auto_sync_active,
     is_any_syncing,
+    is_syncing,
 )
 from mail_hunter.services.backfill import (
     backfill_labels,
@@ -19,6 +23,8 @@ from mail_hunter.services.backfill import (
     is_backfilling,
 )
 from mail_hunter.ws import broadcast
+
+logger = logging.getLogger(__name__)
 
 
 async def sync_endpoint(request: Request):
@@ -52,8 +58,32 @@ async def sync_endpoint(request: Request):
     purge = request.query_params.get("purge") == "1"
     start_folder = request.query_params.get("folder")
 
-    if is_any_syncing():
-        # Queue the sync — only one sync at a time globally
+    if not claim_sync(server_id):
+        if is_auto_sync_active():
+            # Pre-empt auto-sync — user takes priority
+            from mail_hunter.services.imap import get_active_sync_ids
+            logger.info("Sync POST server=%d → pre-empting auto-sync", server_id)
+            for active_id in get_active_sync_ids():
+                cancel_sync(active_id)
+            clear_auto_sync_flag()
+            # Wait for the cancel to take effect
+            for _ in range(20):
+                if not is_any_syncing():
+                    break
+                await asyncio.sleep(0.25)
+            # Try to claim again
+            if not claim_sync(server_id):
+                # Still blocked — fall through to queue
+                logger.info("Sync POST server=%d → pre-empt failed, queuing", server_id)
+            else:
+                logger.info("Sync POST server=%d → STARTING (pre-empted auto)", server_id)
+                asyncio.create_task(
+                    sync_server(server_id, server, full=full, start_folder=start_folder)
+                )
+                return JSONResponse({"ok": True})
+
+        # Another manual sync is running — queue this one
+        logger.info("Sync POST server=%d → QUEUED", server_id)
         request_write_lock()
         await db.execute(
             "INSERT INTO sync_queue (server_id, folder, full, purge) "
@@ -90,6 +120,7 @@ async def sync_endpoint(request: Request):
                 pass
         full = True  # purge implies full
 
+    logger.info("Sync POST server=%d → STARTING", server_id)
     asyncio.create_task(
         sync_server(server_id, server, full=full, start_folder=start_folder)
     )

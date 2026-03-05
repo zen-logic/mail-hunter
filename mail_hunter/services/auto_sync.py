@@ -4,7 +4,7 @@ import time
 
 from mail_hunter.config import decrypt_password
 from mail_hunter.db import open_connection
-from mail_hunter.services.imap import sync_server, is_syncing, is_any_syncing
+from mail_hunter.services.imap import sync_server, claim_sync, is_syncing, is_any_syncing
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,8 @@ async def _auto_sync_loop():
                 # Decrypt and start sync
                 try:
                     server["password"] = decrypt_password(server["password"])
+                    if not claim_sync(server["id"], auto=True):
+                        continue  # someone else started a sync
                     logger.info(
                         "Auto-sync starting for %s (id=%d)",
                         server["name"],

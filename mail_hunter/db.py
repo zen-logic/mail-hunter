@@ -131,6 +131,8 @@ MIGRATIONS = [
         "content_hash",
         "ALTER TABLE attachments ADD COLUMN content_hash TEXT",
     ),
+    # folders columns
+    ("folders", "label_tag", "ALTER TABLE folders ADD COLUMN label_tag TEXT"),
 ]
 
 SYNC_STATE_TABLE = """

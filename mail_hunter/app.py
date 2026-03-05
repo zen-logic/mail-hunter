@@ -45,7 +45,7 @@ from mail_hunter.routes.sync import (
     stop_backfill,
 )
 from mail_hunter.db import request_write_lock
-from mail_hunter.services.imap import sync_server, _start_queued_sync
+from mail_hunter.services.imap import sync_server, claim_sync, _start_queued_sync
 from mail_hunter.services.auto_sync import start_auto_sync, stop_auto_sync
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -102,6 +102,7 @@ async def on_startup():
             logger.info(
                 "Resuming sync for server %s (id=%d)", server["name"], server["id"]
             )
+            claim_sync(server["id"])
             asyncio.create_task(sync_server(server["id"], server))
             first_started = True
         else:

@@ -17,7 +17,7 @@ BATCH_SIZE = 100
 
 
 async def _ensure_folder(
-    db: aiosqlite.Connection, server_id: int, folder_name: str
+    db: aiosqlite.Connection, server_id: int, folder_name: str, *, label_tag: str | None = None
 ) -> int:
     """Get or create a folder, return its id."""
     row = await db.execute_fetchall(
@@ -25,10 +25,15 @@ async def _ensure_folder(
         (server_id, folder_name),
     )
     if row:
+        if label_tag is not None:
+            await db.execute(
+                "UPDATE folders SET label_tag = ? WHERE id = ?",
+                (label_tag, row[0]["id"]),
+            )
         return row[0]["id"]
     cursor = await db.execute(
-        "INSERT INTO folders (server_id, name) VALUES (?, ?)",
-        (server_id, folder_name),
+        "INSERT INTO folders (server_id, name, label_tag) VALUES (?, ?, ?)",
+        (server_id, folder_name, label_tag),
     )
     await db.commit()
     return cursor.lastrowid

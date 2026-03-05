@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse, Response
 from mail_hunter import __version__
 from mail_hunter.config import encrypt_password
 from mail_hunter.db import get_db, open_connection, request_write_lock
+from mail_hunter.services.imap import is_syncing
 from mail_hunter.services.parser import _extract_body, _extract_body_html
 from mail_hunter.services.store import (
     extract_attachment_from_path,
@@ -62,9 +63,14 @@ async def list_servers(request: Request):
     servers = []
     for r in rows:
         folders = await db.execute_fetchall(
-            "SELECT f.id, f.name, COUNT(m.id) as count "
-            "FROM folders f LEFT JOIN mails m ON m.folder_id = f.id "
-            "WHERE f.server_id = ? GROUP BY f.id ORDER BY f.name",
+            "SELECT f.id, f.name, f.label_tag, "
+            "CASE WHEN f.label_tag IS NOT NULL THEN "
+            "  (SELECT COUNT(*) FROM tags t JOIN mails m ON t.mail_id = m.id "
+            "   WHERE t.tag = f.label_tag AND m.server_id = f.server_id) "
+            "ELSE "
+            "  (SELECT COUNT(*) FROM mails m WHERE m.folder_id = f.id) "
+            "END as count "
+            "FROM folders f WHERE f.server_id = ? ORDER BY f.name",
             (r["id"],),
         )
         servers.append(
@@ -78,6 +84,7 @@ async def list_servers(request: Request):
                 "is_gmail": bool(r["is_gmail"]),
                 "sync_enabled": bool(r["sync_enabled"]),
                 "sync_interval": r["sync_interval"],
+                "syncing": is_syncing(r["id"]),
                 "folders": [{"name": f["name"], "count": f["count"]} for f in folders],
             }
         )
@@ -436,23 +443,49 @@ async def list_mails(request: Request):
     db = await get_db()
 
     if folder:
-        # Match the folder itself plus any children (separated by / or .)
-        where = "m.server_id = ? AND (f.name = ? OR f.name LIKE ? OR f.name LIKE ?)"
-        params = (server_id, folder, f"{folder}/%", f"{folder}.%")
-        count_row = await db.execute_fetchall(
-            "SELECT COUNT(*) as cnt FROM mails m JOIN folders f ON m.folder_id = f.id "
-            f"WHERE {where}",
-            params,
+        # Check if this is a virtual (label-backed) folder
+        tag_row = await db.execute_fetchall(
+            "SELECT label_tag FROM folders WHERE server_id = ? AND name = ?",
+            (server_id, folder),
         )
-        total = count_row[0]["cnt"] if count_row else 0
-        rows = await db.execute_fetchall(
-            "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, m.size, "
-            "m.unread, m.attachment_count, m.legal_hold "
-            "FROM mails m JOIN folders f ON m.folder_id = f.id "
-            f"WHERE {where} ORDER BY {sort_col_m} {sort_dir} "
-            f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
-            params,
-        )
+        label_tag = tag_row[0]["label_tag"] if tag_row and tag_row[0]["label_tag"] else None
+
+        if label_tag:
+            # Virtual folder — query by tag
+            count_row = await db.execute_fetchall(
+                "SELECT COUNT(*) as cnt FROM mails m "
+                "WHERE m.server_id = ? AND EXISTS "
+                "(SELECT 1 FROM tags t WHERE t.mail_id = m.id AND t.tag = ?)",
+                (server_id, label_tag),
+            )
+            total = count_row[0]["cnt"] if count_row else 0
+            rows = await db.execute_fetchall(
+                "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, "
+                "m.size, m.unread, m.attachment_count, m.legal_hold "
+                "FROM mails m WHERE m.server_id = ? AND EXISTS "
+                "(SELECT 1 FROM tags t WHERE t.mail_id = m.id AND t.tag = ?) "
+                f"ORDER BY {sort_col_m} {sort_dir} "
+                f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
+                (server_id, label_tag),
+            )
+        else:
+            # Real folder — match the folder itself plus any children (separated by / or .)
+            where = "m.server_id = ? AND (f.name = ? OR f.name LIKE ? OR f.name LIKE ?)"
+            params = (server_id, folder, f"{folder}/%", f"{folder}.%")
+            count_row = await db.execute_fetchall(
+                "SELECT COUNT(*) as cnt FROM mails m JOIN folders f ON m.folder_id = f.id "
+                f"WHERE {where}",
+                params,
+            )
+            total = count_row[0]["cnt"] if count_row else 0
+            rows = await db.execute_fetchall(
+                "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, m.size, "
+                "m.unread, m.attachment_count, m.legal_hold "
+                "FROM mails m JOIN folders f ON m.folder_id = f.id "
+                f"WHERE {where} ORDER BY {sort_col_m} {sort_dir} "
+                f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
+                params,
+            )
     else:
         where = "server_id = ?"
         params = (server_id,)

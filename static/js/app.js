@@ -392,6 +392,7 @@ function handleWSMessage(msg) {
         case 'sync_completed':
             ActivityLog.add(`Sync complete: ${msg.imported} imported, ${msg.skipped} skipped${msg.errors ? ', ' + msg.errors + ' errors' : ''}`);
             syncingServerIds.delete(msg.server_id);
+            cancellingServerIds.delete(msg.server_id);
             if (fullSyncServerId === msg.server_id) fullSyncServerId = null;
             if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
             loadStats();
@@ -405,6 +406,7 @@ function handleWSMessage(msg) {
         case 'sync_cancelled':
             ActivityLog.add(`Sync cancelled (${msg.imported} imported before cancel)`);
             syncingServerIds.delete(msg.server_id);
+            cancellingServerIds.delete(msg.server_id);
             if (fullSyncServerId === msg.server_id) fullSyncServerId = null;
             if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
             loadServers();
@@ -416,6 +418,7 @@ function handleWSMessage(msg) {
         case 'sync_error':
             ActivityLog.add(`Sync error: ${msg.error}`);
             syncingServerIds.delete(msg.server_id);
+            cancellingServerIds.delete(msg.server_id);
             if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
             renderServers(allServers);
             if (msg.server_id === selectedServerId) renderServerDetail();
@@ -576,6 +579,7 @@ function renderGlobalStats() {
 // ── Sync status ─────────────────────────────────────────
 
 const syncingServerIds = new Set();
+const cancellingServerIds = new Set();
 let _statusBarSyncId = null;
 let fullSyncServerId = null;
 let backfillingServerId = null;
@@ -597,6 +601,9 @@ function renderSyncStatus(detail, serverId) {
     `;
     document.getElementById('status-cancel-sync')?.addEventListener('click', async () => {
         if (_statusBarSyncId) {
+            cancellingServerIds.add(_statusBarSyncId);
+            statusActivity.innerHTML = '<span class="status-sync-text">Cancelling...</span>';
+            renderServers(allServers);
             try {
                 await fetch(`/api/servers/${_statusBarSyncId}/sync/cancel`, { method: 'POST' });
             } catch (err) {
@@ -1183,8 +1190,19 @@ async function loadServers() {
         const resp = await fetch('/api/servers');
         if (!resp.ok) return;
         allServers = await resp.json();
+        // Hydrate sync status from server response (catches auto-syncs in progress)
+        for (const s of allServers) {
+            if (s.syncing) syncingServerIds.add(s.id);
+            else syncingServerIds.delete(s.id);
+        }
         renderServers(allServers);
         updateSearchServerOptions();
+        // If any server is syncing, show status bar
+        if (syncingServerIds.size > 0 && !_statusBarSyncId) {
+            const sid = [...syncingServerIds][0];
+            const srv = allServers.find(x => x.id === sid);
+            renderSyncStatus(`Syncing ${srv ? srv.name : 'server'}...`, sid);
+        }
     } catch (err) {
         console.error('Failed to load servers:', err);
     }
@@ -1340,9 +1358,12 @@ function renderServers(servers) {
     for (const s of filtered) {
         const sel = s.id === selectedServerId ? ' selected' : '';
         const isSyncing = syncingServerIds.has(s.id);
+        const isCancelling = cancellingServerIds.has(s.id);
         const isQueued = queuedServerIds.has(s.id);
         let syncBadge = '';
-        if (isSyncing && isQueued) {
+        if (isCancelling) {
+            syncBadge = '<span class="sync-badge cancelling-badge">cancelling</span>';
+        } else if (isSyncing && isQueued) {
             syncBadge = '<span class="sync-badge">syncing</span> <span class="sync-badge queued-badge" data-dequeue="' + s.id + '">queued</span>';
         } else if (isSyncing) {
             syncBadge = '<span class="sync-badge">syncing</span>';
@@ -1625,6 +1646,10 @@ async function renderServerDetail() {
 
     // Cancel sync
     document.getElementById('btn-cancel-sync')?.addEventListener('click', async () => {
+        cancellingServerIds.add(server.id);
+        const btn = document.getElementById('btn-cancel-sync');
+        if (btn) { btn.textContent = 'Cancelling...'; btn.disabled = true; }
+        renderServers(allServers);
         try {
             await fetch(`/api/servers/${server.id}/sync/cancel`, { method: 'POST' });
         } catch (err) {

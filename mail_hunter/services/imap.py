@@ -34,6 +34,15 @@ GMAIL_SKIP_FOLDERS = {
     "Trash",
 }
 
+# Gmail folders that are truly label-backed — their messages appear in All Mail
+# with X-GM-LABELS tags, so we query by tag instead of syncing the folder.
+# Bin, Drafts, Spam, Starred are NOT here because their messages don't appear
+# in All Mail with labels — they must be synced as real IMAP folders.
+_GMAIL_FOLDER_TO_TAG = {
+    "Sent Mail": "Sent",
+    "Important": "Important",
+}
+
 # System label normalisation: raw backslash-prefixed -> clean name
 _GMAIL_SYSTEM_LABELS = {
     "\\Inbox": "Inbox",
@@ -127,6 +136,7 @@ async def _save_sync_state(db, server_id, folder_name, uid_validity, last_uid):
 # Active sync tasks: server_id -> True (used for cancellation)
 _cancel_requested: set[int] = set()
 _active_syncs: set[int] = set()
+_auto_sync_active: int | None = None  # server_id if auto-sync is the current owner
 
 
 def _connect(host: str, port: int, username: str, password: str, use_ssl: bool = True):
@@ -258,18 +268,11 @@ async def test_connection(
 async def sync_server(
     server_id: int, server: dict, *, full: bool = False, start_folder: str | None = None
 ):
-    """Full incremental sync for a server. Runs as background task."""
-    if server_id in _active_syncs:
-        await broadcast(
-            {
-                "type": "sync_error",
-                "server_id": server_id,
-                "error": "Sync already in progress",
-            }
-        )
-        return
+    """Full incremental sync for a server. Runs as background task.
 
-    _active_syncs.add(server_id)
+    Caller must claim the sync slot via claim_sync() before create_task().
+    """
+    _active_syncs.add(server_id)  # ensure registered (idempotent)
     _cancel_requested.discard(server_id)
 
     db = await open_connection()
@@ -325,33 +328,28 @@ async def sync_server(
         )
         await db.commit()
 
-        # On Gmail, skip virtual system folders — labels are captured via X-GM-LABELS
+        # On Gmail, create virtual (label-backed) folders instead of skipping them
+        virtual_folders = set()
         if is_gmail:
-            original_count = len(folders)
-            folders = [
-                f
-                for f in folders
-                if not any(
-                    f.startswith(prefix) and f[len(prefix) :] in GMAIL_SKIP_FOLDERS
-                    for prefix in ("[Gmail]/", "[Google Mail]/")
-                )
-            ]
-            skipped_count = original_count - len(folders)
-            if skipped_count:
-                logger.info(
-                    "Gmail: skipped %d virtual folders, syncing %d",
-                    skipped_count,
-                    len(folders),
-                )
+            for f in folders:
+                for prefix in ("[Gmail]/", "[Google Mail]/"):
+                    if f.startswith(prefix):
+                        suffix = f[len(prefix):]
+                        tag = _GMAIL_FOLDER_TO_TAG.get(suffix)
+                        if tag:
+                            await _ensure_folder(db, server_id, f, label_tag=tag)
+                            virtual_folders.add(f)
+            if virtual_folders:
+                logger.info("Gmail: %d virtual folders created", len(virtual_folders))
 
-        # Reorder so start_folder is synced first
+        # Single-folder sync: only sync the requested folder
         if start_folder and start_folder in folders:
-            folders.remove(start_folder)
-            folders.insert(0, start_folder)
+            folders = [start_folder]
 
-        # Create all folders upfront so the tree updates immediately
+        # Create all non-virtual folders upfront so the tree updates immediately
         for folder_name in folders:
-            await _ensure_folder(db, server_id, folder_name)
+            if folder_name not in virtual_folders:
+                await _ensure_folder(db, server_id, folder_name)
         await broadcast(
             {
                 "type": "sync_folders",
@@ -364,6 +362,10 @@ async def sync_server(
         folder_idx = 0
         while folder_idx < len(folders):
             folder_name = folders[folder_idx]
+
+            if folder_name in virtual_folders:
+                folder_idx += 1
+                continue
 
             if server_id in _cancel_requested:
                 _active_syncs.discard(server_id)
@@ -643,10 +645,13 @@ async def sync_server(
             except Exception:
                 pass
         await db.close()
-        _active_syncs.discard(server_id)
         _cancel_requested.discard(server_id)
+        clear_auto_sync_flag_if(server_id)
 
-        # Check for next queued sync (any server, oldest first)
+        # Check for next queued sync BEFORE releasing the slot —
+        # otherwise a request arriving during the await gap sees
+        # _active_syncs empty and bypasses the queue.
+        next_started = False
         if sync_cleared:
             try:
                 q_db = await open_connection()
@@ -658,6 +663,8 @@ async def sync_server(
                     if q_rows:
                         queue_row = dict(q_rows[0])
                         next_sid = queue_row["server_id"]
+                        _active_syncs.add(next_sid)
+                        next_started = True
                         await q_db.execute(
                             "DELETE FROM sync_queue WHERE server_id = ?",
                             (next_sid,),
@@ -670,6 +677,12 @@ async def sync_server(
                     await _start_queued_sync(next_sid, queue_row)
             except Exception:
                 logger.exception("Failed to start queued sync from queue")
+                if next_started:
+                    _active_syncs.discard(next_sid)
+
+        # Now safe to release the finished server's slot
+        _active_syncs.discard(server_id)
+        logger.info("Sync slot released for server %d — active: %s", server_id, _active_syncs)
 
 
 async def _start_queued_sync(server_id: int, queue_row: dict):
@@ -709,6 +722,7 @@ async def _start_queued_sync(server_id: int, queue_row: dict):
     finally:
         await db.close()
 
+    _active_syncs.add(server_id)
     asyncio.create_task(
         sync_server(server_id, server, full=full, start_folder=start_folder)
     )
@@ -717,6 +731,41 @@ async def _start_queued_sync(server_id: int, queue_row: dict):
 def cancel_sync(server_id: int):
     """Request cancellation of an active sync."""
     _cancel_requested.add(server_id)
+
+
+def claim_sync(server_id: int, *, auto: bool = False) -> bool:
+    """Atomically claim the sync slot. Returns False if any sync is already running."""
+    global _auto_sync_active
+    if _active_syncs:
+        logger.info("claim_sync(%d) DENIED — active: %s", server_id, _active_syncs)
+        return False
+    _active_syncs.add(server_id)
+    _auto_sync_active = server_id if auto else None
+    logger.info("claim_sync(%d) GRANTED (auto=%s)", server_id, auto)
+    return True
+
+
+def is_auto_sync_active() -> bool:
+    """True if the current sync slot is held by auto-sync."""
+    return _auto_sync_active is not None and _auto_sync_active in _active_syncs
+
+
+def clear_auto_sync_flag():
+    """Clear the auto-sync flag (called when auto-sync is pre-empted)."""
+    global _auto_sync_active
+    _auto_sync_active = None
+
+
+def clear_auto_sync_flag_if(server_id: int):
+    """Clear auto-sync flag if this server held it."""
+    global _auto_sync_active
+    if _auto_sync_active == server_id:
+        _auto_sync_active = None
+
+
+def get_active_sync_ids() -> list[int]:
+    """Return a copy of the active sync server IDs."""
+    return list(_active_syncs)
 
 
 def is_syncing(server_id: int) -> bool:

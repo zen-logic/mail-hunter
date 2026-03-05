@@ -455,6 +455,11 @@ body {
     white-space: nowrap;
 }
 
+.cancelling-badge {
+    background: var(--color-status-error);
+    color: #fff;
+}
+
 .queued-badge {
     background: var(--color-primary);
     color: #fff;

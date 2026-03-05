@@ -11,15 +11,27 @@ def parse_message(raw_bytes: bytes) -> dict:
     """Parse raw EML bytes into a structured dict."""
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
 
-    message_id = msg.get("Message-ID", "").strip()
-    subject = msg.get("Subject", "")
-    from_header = msg.get("From", "")
-    to_header = msg.get("To", "")
-    cc_header = msg.get("Cc", "")
-    reply_to = msg.get("Reply-To", "")
-    in_reply_to = msg.get("In-Reply-To", "").strip()
-    references = msg.get("References", "").strip()
-    date_header = msg.get("Date", "")
+    # email.policy.default parses structured headers and can raise
+    # ValueError on malformed data (e.g. CR/LF in address parts).
+    # Fall back to raw string with CR/LF stripped.
+    def _hdr(name, default=""):
+        try:
+            return msg.get(name, default)
+        except ValueError:
+            for key, val in msg.raw_items():
+                if key.lower() == name.lower():
+                    return re.sub(r"[\r\n]+", " ", val).strip()
+            return default
+
+    message_id = _hdr("Message-ID").strip()
+    subject = _hdr("Subject")
+    from_header = _hdr("From")
+    to_header = _hdr("To")
+    cc_header = _hdr("Cc")
+    reply_to = _hdr("Reply-To")
+    in_reply_to = _hdr("In-Reply-To").strip()
+    references = _hdr("References").strip()
+    date_header = _hdr("Date")
 
     # Parse from name + addr
     from_name, from_addr = email.utils.parseaddr(from_header)
@@ -27,7 +39,11 @@ def parse_message(raw_bytes: bytes) -> dict:
     # Parse date — fall back to most recent Received header if Date is broken
     date_iso = None
     date_candidates = [date_header] if date_header else []
-    for received in msg.get_all("Received", []):
+    try:
+        received_headers = msg.get_all("Received", [])
+    except ValueError:
+        received_headers = []
+    for received in received_headers:
         # Received headers have a semicolon before the date portion
         if ";" in received:
             date_candidates.append(received.split(";", 1)[1].strip())
