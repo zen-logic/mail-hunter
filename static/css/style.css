@@ -593,6 +593,37 @@ body {
     text-overflow: clip;
 }
 
+.mail-table tr.held {
+    background: rgba(255, 80, 80, 0.08);
+}
+
+.mail-table tr.held:hover {
+    background: rgba(255, 80, 80, 0.14);
+}
+
+.mail-table tr.held.selected {
+    background: rgba(255, 80, 80, 0.12);
+}
+
+.hold-indicator {
+    color: var(--color-status-error);
+    font-size: var(--font-size-xs);
+    margin-right: 0.25rem;
+    opacity: 0.8;
+}
+
+.hold-badge {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: rgba(255, 107, 107, 0.15);
+    color: var(--color-status-error);
+    letter-spacing: 0.03em;
+    vertical-align: middle;
+    margin-left: 0.4rem;
+}
+
 .mail-table .col-size {
     text-align: right;
 }

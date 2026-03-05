@@ -29,6 +29,8 @@ from mail_hunter.routes.api import (
     remove_tag,
     batch_delete,
     batch_tags,
+    batch_hold,
+    toggle_hold,
     get_stats,
     get_version,
 )
@@ -184,6 +186,7 @@ routes = [
     Route("/api/mails/search", search_mails, methods=["GET"]),
     Route("/api/mails/batch/delete", batch_delete, methods=["POST"]),
     Route("/api/mails/batch/tags", batch_tags, methods=["POST"]),
+    Route("/api/mails/batch/hold", batch_hold, methods=["POST"]),
     Route("/api/mails/{mail_id:int}", get_mail, methods=["GET"]),
     Route("/api/mails/{mail_id:int}", delete_mail, methods=["DELETE"]),
     Route("/api/mails/{mail_id:int}/raw", get_mail_raw, methods=["GET"]),
@@ -193,6 +196,7 @@ routes = [
         get_mail_attachment,
         methods=["GET"],
     ),
+    Route("/api/mails/{mail_id:int}/hold", toggle_hold, methods=["PUT"]),
     Route("/api/mails/{mail_id:int}/tags", add_tag, methods=["POST"]),
     Route("/api/mails/{mail_id:int}/tags/{tag:str}", remove_tag, methods=["DELETE"]),
     # Stats / version

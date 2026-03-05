@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mail Hunter — Your Mail, Your Server, Your Archive</title>
-<meta name="description" content="Self-hosted email archive. Unify decades of correspondence from IMAP servers, MBOX exports, and EML files into a single searchable collection you control.">
+<meta name="description" content="Self-hosted email archiving. Sync IMAP servers, import EML and MBOX files, search everything from one browser tab. Compressed, deduplicated, yours.">
 <meta property="og:title" content="Mail Hunter — Your Mail, Your Server, Your Archive">
-<meta property="og:description" content="Self-hosted email archive. Unify decades of correspondence from IMAP servers, MBOX exports, and EML files into a single searchable collection you control.">
+<meta property="og:description" content="Self-hosted email archiving. Sync IMAP servers, import EML and MBOX files, search everything from one browser tab. Compressed, deduplicated, yours.">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Mail Hunter">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Mail Hunter — Your Mail, Your Server, Your Archive">
-<meta name="twitter:description" content="Self-hosted email archive. Unify decades of correspondence from IMAP servers, MBOX exports, and EML files into a single searchable collection you control.">
+<meta name="twitter:description" content="Self-hosted email archiving. Sync IMAP servers, import EML and MBOX files, search everything from one browser tab. Compressed, deduplicated, yours.">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -23,6 +23,9 @@
     --bg-light: #111;
     --dim: #338033;
     --bright: #33ff66;
+    --warn-bg: #1a1400;
+    --warn-border: #665200;
+    --warn-text: #ccaa00;
   }
 
   body {
@@ -68,6 +71,21 @@
     padding: 2rem 1.5rem;
   }
 
+  /* ---------- Warning banner ---------- */
+  .warning-banner {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    color: var(--warn-text);
+    padding: 0.75rem 1rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    margin-bottom: 1rem;
+  }
+  .warning-banner strong {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
   /* ---------- Blinking cursor ---------- */
   @keyframes blink {
     0%, 49% { opacity: 1; }
@@ -89,7 +107,7 @@
   }
   @keyframes type-tagline {
     from { width: 0; }
-    to { width: 52ch; }
+    to { width: 46ch; }
   }
 
   /* ---------- Hero ---------- */
@@ -118,9 +136,9 @@
     margin-top: 0.75rem;
     overflow: hidden;
     white-space: nowrap;
-    width: 52ch;
+    width: 46ch;
     max-width: 100%;
-    animation: type-tagline 1.5s steps(52) 1.8s both;
+    animation: type-tagline 1.5s steps(46) 1.8s both;
   }
   .hero-desc {
     margin-top: 1.25rem;
@@ -155,22 +173,48 @@
   .btn-cta .cta-prompt {
     color: var(--green-dark);
   }
-  .cta-secondary {
-    display: inline-block;
-    font-family: inherit;
-    font-size: 1rem;
-    font-weight: 700;
-    color: var(--green);
-    background: transparent;
-    border: 1px solid var(--green);
-    padding: 0.65rem 1.5rem;
-    text-decoration: none;
-    transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+
+  /* ---------- Install snippet ---------- */
+  .install-snippet {
+    margin-top: 1.5rem;
+    max-width: 540px;
   }
-  .cta-secondary:hover {
-    background: var(--green);
-    color: var(--bg);
-    box-shadow: 0 0 15px rgba(0,255,65,.4);
+  .install-box {
+    display: flex;
+    align-items: center;
+    background: var(--bg-light);
+    border: 1px solid var(--green-dark);
+    padding: 0.6rem 0.75rem 0.6rem 1rem;
+    font-size: 0.92rem;
+    gap: 0.75rem;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .install-box:hover {
+    border-color: var(--green);
+    box-shadow: 0 0 10px rgba(0,255,65,.25);
+  }
+  .install-box code {
+    flex: 1;
+    color: var(--green);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: all;
+  }
+  .install-box .copy-btn {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid var(--green-dark);
+    color: var(--dim);
+    font-family: inherit;
+    font-size: 0.8rem;
+    padding: 0.3rem 0.6rem;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  .install-box .copy-btn:hover {
+    color: var(--green);
+    border-color: var(--green);
   }
 
   /* ---------- Section headings ---------- */
@@ -331,9 +375,15 @@
 
 <div class="wrapper">
 
+  <div class="warning-banner">
+    <strong>Early release:</strong> This project is under active development
+    and has not been thoroughly tested. Back up your data. Do not use as your
+    only copy of anything important.
+  </div>
+
   <section class="hero">
     <div><span class="prompt">$</span> <span class="hero-title">mail-hunter</span><span class="cursor"></span></div>
-    <div class="hero-tagline">An email archive that unifies decades of mail.</div>
+    <div class="hero-tagline">Your mail. Your server. Your archive.</div>
     <p class="hero-desc">
       Old IMAP servers you&rsquo;re afraid to close. MBOX exports from
       providers that no longer exist. EML files rescued from old machines.
@@ -343,6 +393,12 @@
     </p>
     <div class="hero-cta">
       <a href="https://github.com/zen-logic/mail-hunter" class="btn-cta"><span class="cta-prompt">&gt; </span>./get-mailhunter</a>
+    </div>
+    <div class="install-snippet">
+      <div class="install-box">
+        <code>pip install -r requirements.txt &amp;&amp; python -m mail_hunter</code>
+        <button class="copy-btn" onclick="navigator.clipboard.writeText('pip install -r requirements.txt && python -m mail_hunter')">copy</button>
+      </div>
     </div>
   </section>
 
@@ -362,19 +418,21 @@
     <div class="highlight-card">
       <h3>Your mail, your disk</h3>
       <p>
-        Every message is stored locally in a content-addressable archive.
-        Deduplicated by SHA-256 hash, compressed with zstd. No cloud
-        dependency, no subscription, no provider lock-in. Runs on any
-        machine with Python.
+        Every message is stored locally in a content-addressable archive
+        compressed with <code>zstd</code> at level 19 &mdash; typically
+        40&ndash;60% of the original size. Deduplicated by SHA-256 hash
+        so the same message across five servers is stored once. No cloud
+        dependency, no subscription, no provider lock-in.
       </p>
     </div>
 
     <div class="highlight-card">
       <h3>Search everything at once</h3>
       <p>
-        Search across all servers, all folders, all years. Filter by
-        sender, recipient, subject, body text, or date range. Results
-        come back fast because the index is local.
+        Full-text search across all servers, all folders, all years.
+        Filter by sender, recipient, subject, body, date range, or tags.
+        Results come back fast because the index is local SQLite, not a
+        remote API with rate limits.
       </p>
     </div>
   </section>
@@ -387,27 +445,27 @@
       <div class="feature-card">
         <h3>IMAP Sync</h3>
         <p>
-          Incremental sync via UID tracking. Respects UIDVALIDITY changes.
-          Sync progress streamed live over WebSocket. Cancel and resume
-          at any time.
+          Incremental sync via UID checkpoints. Full resync and purge
+          options. Sync queue ensures one operation at a time. Progress
+          streamed live over WebSocket. Cancel and resume at any time.
         </p>
       </div>
 
       <div class="feature-card">
         <h3>Import</h3>
         <p>
-          Drag and drop EML files or MBOX archives. Automatic address
-          matching to existing servers. Unmatched addresses prompt for
-          resolution before import.
+          Drag and drop EML files or MBOX archives anywhere in the app.
+          Automatic address matching to existing servers. Batch import
+          with progress tracking and duplicate detection.
         </p>
       </div>
 
       <div class="feature-card">
         <h3>Deduplication</h3>
         <p>
-          Messages are hashed on content. Identical messages across
-          servers and folders are stored once. Duplicate counts shown
-          in the UI.
+          Messages hashed by Message-ID and content. Identical messages
+          across servers and folders stored once on disk. Duplicate
+          counts visible at a glance in the message list.
         </p>
       </div>
 
@@ -415,16 +473,17 @@
         <h3>Compression</h3>
         <p>
           Raw EML files compressed with <code>zstd</code> at level 19.
-          Typical 70&ndash;85% size reduction. Legacy uncompressed files
-          continue to work without migration.
+          Content-addressable storage keyed by SHA-256. Legacy
+          uncompressed archives continue to work without migration.
         </p>
       </div>
 
       <div class="feature-card">
         <h3>Tagging</h3>
         <p>
-          Tag messages with arbitrary labels. Organise across server
-          and folder boundaries. Your taxonomy, not your provider&rsquo;s.
+          Tag individual messages or batch-tag entire selections.
+          Organise across server and folder boundaries. Gmail labels
+          imported automatically via <code>X-GM-LABELS</code> backfill.
         </p>
       </div>
 
@@ -432,25 +491,44 @@
         <h3>Legal Hold</h3>
         <p>
           Place individual messages on legal hold to prevent deletion.
-          For compliance, disputes, or anything you can&rsquo;t afford
-          to lose.
+          Held messages survive batch deletes, folder purges, and server
+          removal. For compliance, disputes, or anything you can&rsquo;t
+          afford to lose.
         </p>
       </div>
 
       <div class="feature-card">
         <h3>Message Preview</h3>
         <p>
-          View HTML, plain text, and raw source in a sandboxed preview.
-          Download the original EML or individual attachments directly.
+          View HTML (with inline CID images), plain text, and raw RFC822
+          source in a full-screen sandboxed preview. Download the original
+          EML or extract individual attachments.
         </p>
       </div>
 
       <div class="feature-card">
-        <h3>Three-Panel UI</h3>
+        <h3>Real-Time UI</h3>
         <p>
-          Servers and folders on the left, message list in the middle,
-          detail pane on the right. Resizable panels. Keyboard and mouse.
-          Runs in any browser.
+          Three-panel layout with resizable panes. Sync progress, folder
+          counts, and system status update live via WebSocket. Keyboard
+          navigation and multiple colour themes.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <h3>Batch Operations</h3>
+        <p>
+          Select multiple messages with click, shift-click, or select-all.
+          Batch delete, batch tag, and batch export. Legal hold respected
+          across all bulk operations.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <h3>Encrypted Credentials</h3>
+        <p>
+          IMAP passwords encrypted at rest with Fernet symmetric encryption.
+          Key generated on first run, stored in your config.
         </p>
       </div>
 
@@ -483,7 +561,7 @@
         <h3>Small businesses</h3>
         <p>
           Searchable email archive with legal hold for compliance.
-          No per-seat licensing, no vendor lock-in.
+          No per-seat licensing, no vendor lock-in, no monthly bill.
         </p>
       </div>
 
@@ -493,7 +571,7 @@
   <!-- Tech -->
   <section class="tech">
     <p>
-      Python &middot; Starlette &middot; SQLite &middot; Vanilla JS.
+      Python &middot; Starlette &middot; SQLite (WAL mode) &middot; Vanilla JS.
       No build step, no framework churn, no external services.
       Runs anywhere Python runs.
     </p>

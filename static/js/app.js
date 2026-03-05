@@ -91,7 +91,7 @@ function showMessagePreview(mail, bodyText, bodyHtml, rawSource) {
         allViews.forEach(v => v.classList.add('hidden'));
         btn.classList.add('active');
         view.classList.remove('hidden');
-        if (view === previewIframe) previewIframe.srcdoc = bodyHtml;
+        if (view === previewIframe) previewIframe.srcdoc = '<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}</style>' + bodyHtml;
     }
 
     toggle.classList.remove('hidden');
@@ -648,7 +648,7 @@ serverFilter.addEventListener('keydown', (e) => {
 
 const searchPanel = document.getElementById('search-panel');
 const searchToggleBtn = document.getElementById('btn-search');
-const searchFields = ['search-from', 'search-to', 'search-subject', 'search-body', 'search-date-from', 'search-date-to', 'search-tag', 'search-server'];
+const searchFields = ['search-from', 'search-to', 'search-subject', 'search-body', 'search-date-from', 'search-date-to', 'search-tag', 'search-held', 'search-server'];
 
 searchToggleBtn.addEventListener('click', () => {
     const visible = !searchPanel.classList.contains('hidden');
@@ -673,6 +673,8 @@ function getSearchParams() {
     if (dateFrom) params.date_from = dateFrom;
     if (dateTo) params.date_to = dateTo;
     if (tag) params.tag = tag;
+    const held = document.getElementById('search-held').checked;
+    if (held) params.held = '1';
     const searchServer = document.getElementById('search-server').value;
     if (searchServer) params.server_id = searchServer;
     else if (selectedServerId) params.server_id = selectedServerId;
@@ -681,7 +683,7 @@ function getSearchParams() {
 
 function hasSearchParams() {
     const p = getSearchParams();
-    return p.from || p.to || p.subject || p.body || p.date_from || p.date_to || p.tag;
+    return p.from || p.to || p.subject || p.body || p.date_from || p.date_to || p.tag || p.held;
 }
 
 document.getElementById('search-go').addEventListener('click', () => {
@@ -689,7 +691,11 @@ document.getElementById('search-go').addEventListener('click', () => {
 });
 
 document.getElementById('search-clear').addEventListener('click', () => {
-    searchFields.forEach(id => document.getElementById(id).value = '');
+    searchFields.forEach(id => {
+        const el = document.getElementById(id);
+        if (el.type === 'checkbox') el.checked = false;
+        else el.value = '';
+    });
     document.getElementById('mail-filter').value = '';
     currentPage = 0;
     if (selectedServerId) loadMails();
@@ -1820,15 +1826,17 @@ function renderMails(mails) {
     for (const m of mails) {
         const sel = (selectedMailIds.has(m.id) || m.id === selectedMailId) ? ' selected' : '';
         const unread = m.unread ? ' unread' : '';
+        const held = m.legal_hold ? ' held' : '';
         const checked = selectedMailIds.has(m.id) ? ' checked' : '';
         const fromDisplay = m.from_name || m.from_addr || '';
         const toDisplay = m.to_addr || '';
         const subjectDisplay = m.subject || '(no subject)';
-        html += `<tr class="${sel}${unread}" data-id="${m.id}">
+        const holdIcon = m.legal_hold ? '<span class="hold-indicator" title="Legal hold">&#128274;</span>' : '';
+        html += `<tr class="${sel}${unread}${held}" data-id="${m.id}">
             <td class="col-check"><input type="checkbox" class="row-check"${checked}></td>
             <td class="col-from" title="${esc(fromDisplay)}">${esc(fromDisplay)}</td>
             <td class="col-to" title="${esc(toDisplay)}">${esc(toDisplay)}</td>
-            <td class="col-subject" title="${esc(subjectDisplay)}">${esc(subjectDisplay)}</td>
+            <td class="col-subject" title="${esc(subjectDisplay)}">${holdIcon}${esc(subjectDisplay)}</td>
             <td class="col-date">${formatDate(m.date)}</td>
             <td class="col-size">${formatSize(m.size)}</td>
             <td class="col-attachments">${m.attachment_count || ''}</td>
@@ -1988,7 +1996,7 @@ function renderDetail(mail) {
 
     container.innerHTML = `
         <div class="detail-section">
-            <div class="detail-subject">${esc(mail.subject || '(no subject)')}</div>
+            <div class="detail-subject">${esc(mail.subject || '(no subject)')}${mail.legal_hold ? ' <span class="hold-badge">LEGAL HOLD</span>' : ''}</div>
             <div class="detail-location">${(() => {
                 const crumbs = [];
                 if (mail.server_name) {
@@ -2034,7 +2042,8 @@ function renderDetail(mail) {
             <div class="detail-btn-group">
                 ${mail.raw_path ? `<button class="btn" id="btn-view-message">View Message</button>` : ''}
                 ${mail.raw_path ? `<button class="btn" id="btn-download-eml">Download EML</button>` : ''}
-                <button class="btn btn-danger" id="btn-delete-mail">Delete Message</button>
+                <button class="btn" id="btn-toggle-hold">${mail.legal_hold ? 'Release Hold' : 'Legal Hold'}</button>
+                <button class="btn btn-danger" id="btn-delete-mail"${mail.legal_hold ? ' disabled title="Message is on legal hold"' : ''}>Delete Message</button>
             </div>
         </div>
     `;
@@ -2075,6 +2084,23 @@ function renderDetail(mail) {
         btn.addEventListener('click', () => {
             window.location.href = `/api/mails/${mail.id}/attachments/${btn.dataset.attIdx}`;
         });
+    });
+
+    // Toggle legal hold
+    document.getElementById('btn-toggle-hold')?.addEventListener('click', async () => {
+        try {
+            const resp = await fetch(`/api/mails/${mail.id}/hold`, { method: 'PUT' });
+            if (!resp.ok) return;
+            const data = await resp.json();
+            mail.legal_hold = data.legal_hold;
+            // Update list row state
+            const listItem = currentMails.find(m => m.id === mail.id);
+            if (listItem) listItem.legal_hold = data.legal_hold;
+            applyFilterAndRender();
+            renderDetail(mail);
+        } catch (err) {
+            console.error('Toggle hold failed:', err);
+        }
     });
 
     // Delete mail
@@ -2159,6 +2185,8 @@ function renderMultiSelect() {
         <div class="detail-section">
             <h3>Batch Actions</h3>
             <div class="detail-btn-group">
+                <button class="btn" id="btn-batch-hold">Legal Hold</button>
+                <button class="btn" id="btn-batch-release">Release Hold</button>
                 <button class="btn btn-danger" id="btn-batch-delete">Delete</button>
             </div>
         </div>
@@ -2174,6 +2202,30 @@ function renderMultiSelect() {
             <div class="multi-select-list">${listHtml}</div>
         </div>
     `;
+
+    // Batch hold / release
+    const batchHoldHandler = async (hold) => {
+        const label = hold ? 'hold' : 'release';
+        try {
+            const resp = await fetch('/api/mails/batch/hold', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mail_ids: [...selectedMailIds], hold }),
+            });
+            if (!resp.ok) return;
+            const result = await resp.json();
+            ActivityLog.add(`Batch ${label}: ${result.updated} messages updated`);
+            for (const m of currentMails) {
+                if (selectedMailIds.has(m.id)) m.legal_hold = hold;
+            }
+            applyFilterAndRender();
+            renderMultiSelect();
+        } catch (err) {
+            console.error(`Batch ${label} failed:`, err);
+        }
+    };
+    document.getElementById('btn-batch-hold')?.addEventListener('click', () => batchHoldHandler(1));
+    document.getElementById('btn-batch-release')?.addEventListener('click', () => batchHoldHandler(0));
 
     // Batch delete
     document.getElementById('btn-batch-delete')?.addEventListener('click', async () => {

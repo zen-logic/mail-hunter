@@ -8,9 +8,27 @@ from datetime import datetime, timedelta
 from mail_hunter.db import get_db, close_db
 
 SERVERS = [
-    {"name": "Work Email", "host": "imap.megacorp.com", "port": 993, "username": "j.smith@megacorp.com", "password": "test"},
-    {"name": "Personal Gmail", "host": "imap.gmail.com", "port": 993, "username": "john.smith42@gmail.com", "password": "test"},
-    {"name": "Legacy POP3", "host": "pop3.oldmail.net", "port": 995, "username": "jsmith@oldmail.net", "password": "test"},
+    {
+        "name": "Work Email",
+        "host": "imap.megacorp.com",
+        "port": 993,
+        "username": "j.smith@megacorp.com",
+        "password": "test",
+    },
+    {
+        "name": "Personal Gmail",
+        "host": "imap.gmail.com",
+        "port": 993,
+        "username": "john.smith42@gmail.com",
+        "password": "test",
+    },
+    {
+        "name": "Legacy POP3",
+        "host": "pop3.oldmail.net",
+        "port": 995,
+        "username": "jsmith@oldmail.net",
+        "password": "test",
+    },
 ]
 
 IMAP_FOLDERS = ["INBOX", "Sent", "Drafts", "Trash", "Archive", "Junk"]
@@ -111,9 +129,17 @@ BODY_SNIPPETS = [
 ]
 
 ATTACHMENTS = [
-    ("Q4_Budget_2026.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 245_000),
+    (
+        "Q4_Budget_2026.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        245_000,
+    ),
     ("invoice_4821.pdf", "application/pdf", 128_000),
-    ("meeting_notes.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 45_000),
+    (
+        "meeting_notes.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        45_000,
+    ),
     ("screenshot.png", "image/png", 890_000),
     ("project_plan.pdf", "application/pdf", 2_100_000),
     ("photo_001.jpg", "image/jpeg", 3_400_000),
@@ -121,11 +147,26 @@ ATTACHMENTS = [
     ("contract_v2.pdf", "application/pdf", 312_000),
     ("logo_redesign.svg", "image/svg+xml", 18_000),
     ("backup_log.txt", "text/plain", 4_200),
-    ("presentation.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", 5_600_000),
+    (
+        "presentation.pptx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        5_600_000,
+    ),
     ("data_export.csv", "text/csv", 1_200_000),
 ]
 
-TAGS = ["important", "follow-up", "personal", "finance", "project-x", "archived", "client", "urgent", "travel", "receipts"]
+TAGS = [
+    "important",
+    "follow-up",
+    "personal",
+    "finance",
+    "project-x",
+    "archived",
+    "client",
+    "urgent",
+    "travel",
+    "receipts",
+]
 
 
 async def seed():

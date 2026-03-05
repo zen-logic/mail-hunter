@@ -12,7 +12,11 @@ from mail_hunter import __version__
 from mail_hunter.config import encrypt_password
 from mail_hunter.db import get_db, open_connection, request_write_lock
 from mail_hunter.services.parser import _extract_body, _extract_body_html
-from mail_hunter.services.store import extract_attachment_from_path, read_raw, _get_archive_root
+from mail_hunter.services.store import (
+    extract_attachment_from_path,
+    read_raw,
+    _get_archive_root,
+)
 from mail_hunter.ws import broadcast
 
 logger = logging.getLogger(__name__)
@@ -278,9 +282,7 @@ async def _delete_folder_task(
         raw_paths = [r["raw_path"] for r in rows]
 
         await conn.execute("DELETE FROM mails WHERE folder_id = ?", (folder_id,))
-        await conn.execute(
-            "DELETE FROM folders WHERE id = ?", (folder_id,)
-        )
+        await conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
         await conn.execute(
             "DELETE FROM sync_state WHERE server_id = ? AND folder_name = ?",
             (server_id, folder_name),
@@ -339,8 +341,9 @@ async def search_mails(request: Request):
     date_from = request.query_params.get("date_from", "").strip()
     date_to = request.query_params.get("date_to", "").strip()
     tag_q = request.query_params.get("tag", "").strip()
+    held_q = request.query_params.get("held", "").strip()
 
-    if not any([from_q, to_q, subject_q, body_q, date_from, date_to, tag_q]):
+    if not any([from_q, to_q, subject_q, body_q, date_from, date_to, tag_q, held_q]):
         return JSONResponse({"items": [], "total": 0, "page": 0, "pageSize": PAGE_SIZE})
 
     conditions = []
@@ -382,6 +385,9 @@ async def search_mails(request: Request):
             )
             params.append(tag)
 
+    if held_q:
+        conditions.append("legal_hold = 1")
+
     where = " AND ".join(conditions)
     sort_col, _sort_col_m, sort_dir, page = _sort_params(request)
 
@@ -392,7 +398,7 @@ async def search_mails(request: Request):
     total = count_row[0]["cnt"] if count_row else 0
 
     rows = await db.execute_fetchall(
-        "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count "
+        "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count, legal_hold "
         f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
         f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
         params,
@@ -425,7 +431,7 @@ async def list_mails(request: Request):
         total = count_row[0]["cnt"] if count_row else 0
         rows = await db.execute_fetchall(
             "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, m.size, "
-            "m.unread, m.attachment_count "
+            "m.unread, m.attachment_count, m.legal_hold "
             "FROM mails m JOIN folders f ON m.folder_id = f.id "
             f"WHERE {where} ORDER BY {sort_col_m} {sort_dir} "
             f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
@@ -439,7 +445,7 @@ async def list_mails(request: Request):
         )
         total = count_row[0]["cnt"] if count_row else 0
         rows = await db.execute_fetchall(
-            "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count "
+            "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count, legal_hold "
             f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
             f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
             params,
@@ -635,9 +641,11 @@ async def get_mail_preview(request: Request):
                     b64 = base64.b64encode(data).decode("ascii")
                     cid_map[cid] = f"data:{ct};base64,{b64}"
         if cid_map:
+
             def replace_cid(m):
                 ref = m.group(1)
                 return cid_map.get(ref, m.group(0))
+
             body_html = re.sub(r'cid:([^\s"\'><]+)', replace_cid, body_html)
 
     raw_source = raw_bytes.decode("utf-8", errors="replace")
@@ -753,6 +761,41 @@ async def get_stats(request: Request):
     stats["servers"] = server_row[0]["cnt"] if server_row else 0
     stats["archive_size"] = await asyncio.to_thread(_archive_disk_usage)
     return JSONResponse(stats)
+
+
+async def batch_hold(request: Request):
+    """Set or release legal hold on multiple mails."""
+    data = await request.json()
+    mail_ids = data.get("mail_ids", [])
+    hold = data.get("hold", 1)
+    if not mail_ids:
+        return JSONResponse({"updated": 0})
+
+    request_write_lock()
+    db = await get_db()
+    placeholders = ",".join("?" for _ in mail_ids)
+    cursor = await db.execute(
+        f"UPDATE mails SET legal_hold = ? WHERE id IN ({placeholders})",
+        [hold] + mail_ids,
+    )
+    await db.commit()
+    return JSONResponse({"updated": cursor.rowcount})
+
+
+async def toggle_hold(request: Request):
+    """Toggle legal_hold between 0 and 1 for a single mail."""
+    mail_id = request.path_params["mail_id"]
+    request_write_lock()
+    db = await get_db()
+    row = await db.execute_fetchall(
+        "SELECT legal_hold FROM mails WHERE id = ?", (mail_id,)
+    )
+    if not row:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    new_val = 0 if row[0]["legal_hold"] else 1
+    await db.execute("UPDATE mails SET legal_hold = ? WHERE id = ?", (new_val, mail_id))
+    await db.commit()
+    return JSONResponse({"legal_hold": new_val})
 
 
 async def get_version(request: Request):
