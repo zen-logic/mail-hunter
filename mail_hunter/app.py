@@ -11,7 +11,7 @@ from cryptography.fernet import InvalidToken
 
 from mail_hunter.config import decrypt_password, encrypt_password
 from mail_hunter.db import get_db, close_db
-from mail_hunter.ws import ws_endpoint
+from mail_hunter.ws import ws_endpoint, broadcast
 from mail_hunter.routes.api import (
     list_servers,
     create_server,
@@ -131,6 +131,20 @@ async def on_startup():
             await db.commit()
             logger.info("Starting queued sync for server %d on startup", sid)
             await _start_queued_sync(sid, queue_row)
+
+    # Populate WS state for any remaining queued syncs so badges replay
+    remaining = await db.execute_fetchall(
+        "SELECT sq.server_id, s.name FROM sync_queue sq "
+        "JOIN servers s ON s.id = sq.server_id"
+    )
+    for rq in remaining:
+        await broadcast(
+            {
+                "type": "sync_queued",
+                "server_id": rq["server_id"],
+                "server_name": rq["name"],
+            }
+        )
 
 
 async def on_shutdown():

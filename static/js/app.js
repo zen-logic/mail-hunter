@@ -377,11 +377,15 @@ function handleWSMessage(msg) {
                 ActivityLog.add(logDetail);
             }
             if (msg.folder_count != null) {
-                const folderEl = document.querySelector(`.folder-item[data-server="${msg.server_id}"][data-folder="${CSS.escape(msg.folder)}"]`);
-                if (folderEl) {
-                    const countSpan = folderEl.querySelector('.folder-count');
-                    if (countSpan) countSpan.textContent = msg.folder_count;
+                // Update in-memory folder count
+                const srv = allServers.find(x => x.id === msg.server_id);
+                if (srv && srv.folders) {
+                    const fo = srv.folders.find(f => f.name === msg.folder);
+                    if (fo) fo.count = msg.folder_count;
+                    else srv.folders.push({ name: msg.folder, count: msg.folder_count });
                 }
+                // Re-render tree so parent roll-ups recalculate
+                renderServers(allServers);
             }
             break;
         }
@@ -481,11 +485,14 @@ connectWS();
 
 // ── Global stats ────────────────────────────────────────
 
+let _lastStats = null;
+
 async function loadStats() {
     try {
         const resp = await fetch('/api/stats');
         if (!resp.ok) return;
         const s = await resp.json();
+        _lastStats = s;
         const el = document.getElementById('status-stats');
         el.innerHTML =
             `Servers: <strong>${s.servers.toLocaleString()}</strong> &nbsp; ` +
@@ -495,6 +502,71 @@ async function loadStats() {
     } catch (err) {
         console.error('Failed to load stats:', err);
     }
+}
+
+function renderGlobalStats() {
+    const container = document.getElementById('detail-content');
+    const s = _lastStats;
+    if (!s) {
+        container.innerHTML = '<div class="empty-state"><span>Loading...</span></div>';
+        loadStats().then(renderGlobalStats);
+        return;
+    }
+
+    // Determine system status
+    let statusDot, statusText;
+    if (syncingServerIds.size > 0) {
+        const sid = _statusBarSyncId || [...syncingServerIds][0];
+        const srv = allServers.find(x => x.id === sid);
+        const name = srv ? srv.name : `Server ${sid}`;
+        statusDot = 'syncing';
+        statusText = `Syncing ${esc(name)}`;
+        if (queuedServerIds.size > 0) {
+            statusText += ` (${queuedServerIds.size} queued)`;
+        }
+    } else if (backfillingServerId) {
+        const srv = allServers.find(x => x.id === backfillingServerId);
+        const name = srv ? srv.name : `Server ${backfillingServerId}`;
+        statusDot = 'syncing';
+        statusText = `Backfilling ${esc(name)}`;
+    } else {
+        statusDot = 'idle';
+        statusText = 'Idle';
+    }
+
+    container.innerHTML = `
+        <div class="detail-section">
+            <div class="detail-subject">Mail Hunter</div>
+        </div>
+        <div class="detail-section">
+            <h3>Status</h3>
+            <div class="system-status">
+                <span class="status-dot ${statusDot}"></span>
+                <span>${statusText}</span>
+            </div>
+        </div>
+        <div class="detail-section">
+            <h3>Overview</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value">${s.messages.toLocaleString()}</div>
+                    <div class="stat-label">Messages</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${s.servers.toLocaleString()}</div>
+                    <div class="stat-label">Servers</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${s.duplicates.toLocaleString()}</div>
+                    <div class="stat-label">Duplicates</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${formatSize(s.archive_size)}</div>
+                    <div class="stat-label">Archive</div>
+                </div>
+            </div>
+        </div>
+    `;
 }
 
 // ── Sync status ─────────────────────────────────────────
@@ -556,6 +628,12 @@ function renderBackfillStatus(detail) {
 
 const serverFilter = document.getElementById('server-filter');
 let allServers = [];
+
+document.querySelector('#server-panel .panel-title').addEventListener('click', () => {
+    clearSelection();
+    renderServers(allServers);
+});
+document.querySelector('#server-panel .panel-title').style.cursor = 'pointer';
 
 serverFilter.addEventListener('input', () => renderServers(allServers));
 
@@ -1349,7 +1427,7 @@ async function renderServerDetail() {
     const container = document.getElementById('detail-content');
     const server = allServers.find(s => s.id === selectedServerId);
     if (!server) {
-        container.innerHTML = '<div class="empty-state"><span>Select a message</span></div>';
+        renderGlobalStats();
         return;
     }
 
@@ -1891,11 +1969,11 @@ async function selectMail(id) {
 // ── Detail panel ────────────────────────────────────────
 
 function renderDetail(mail) {
-    const container = document.getElementById('detail-content');
     if (!mail) {
-        container.innerHTML = '<div class="empty-state"><span>Select a message</span></div>';
+        renderGlobalStats();
         return;
     }
+    const container = document.getElementById('detail-content');
 
     const tags = (mail.tags || []).map(t =>
         `<span class="tag">${esc(t)}<span class="tag-remove" data-tag="${esc(t)}">&times;</span></span>`
@@ -2546,5 +2624,5 @@ setActivePanel('server');
 // ── Init ────────────────────────────────────────────────
 
 loadServers();
-loadStats();
+loadStats().then(renderGlobalStats);
 renderSyncStatus(null);

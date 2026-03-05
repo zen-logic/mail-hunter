@@ -10,7 +10,7 @@ from mail_hunter import __version__
 from mail_hunter.config import encrypt_password
 from mail_hunter.db import get_db, open_connection, request_write_lock
 from mail_hunter.services.parser import _extract_body, _extract_body_html
-from mail_hunter.services.store import extract_attachment_from_path, read_raw
+from mail_hunter.services.store import extract_attachment_from_path, read_raw, _get_archive_root
 from mail_hunter.ws import broadcast
 
 logger = logging.getLogger(__name__)
@@ -709,17 +709,29 @@ async def batch_tags(request: Request):
     return JSONResponse({"updated": updated})
 
 
+def _archive_disk_usage() -> int:
+    """Return total bytes used by the archive directory on disk."""
+    root = _get_archive_root()
+    if not root.exists():
+        return 0
+    total = 0
+    for f in root.rglob("*"):
+        if f.is_file():
+            total += f.stat().st_size
+    return total
+
+
 async def get_stats(request: Request):
     db = await get_db()
     row = await db.execute_fetchall(
         "SELECT COUNT(*) as messages, "
-        "COALESCE(SUM(CASE WHEN dup_count > 0 THEN 1 ELSE 0 END), 0) as duplicates, "
-        "COALESCE(SUM(raw_size), 0) as archive_size "
+        "COALESCE(SUM(CASE WHEN dup_count > 0 THEN 1 ELSE 0 END), 0) as duplicates "
         "FROM mails"
     )
-    stats = dict(row[0]) if row else {"messages": 0, "duplicates": 0, "archive_size": 0}
+    stats = dict(row[0]) if row else {"messages": 0, "duplicates": 0}
     server_row = await db.execute_fetchall("SELECT COUNT(*) as cnt FROM servers")
     stats["servers"] = server_row[0]["cnt"] if server_row else 0
+    stats["archive_size"] = await asyncio.to_thread(_archive_disk_usage)
     return JSONResponse(stats)
 
 
