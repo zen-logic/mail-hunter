@@ -3519,20 +3519,20 @@ function showLoginScreen(serverName) {
     document.getElementById('app').classList.add('hidden');
     const title = serverName ? `Mail Hunter — ${esc(serverName)}` : 'Mail Hunter';
     screen.innerHTML = `
-        <div class="login-card">
+        <div class="modal-dialog">
             <h1 class="login-title">${title}</h1>
-            <div class="login-field">
-                <label class="login-label" for="login-username">Username</label>
+            <div class="modal-field">
+                <label class="modal-label" for="login-username">Username</label>
                 <input type="text" class="modal-input" id="login-username" autocomplete="username">
             </div>
-            <div class="login-field">
-                <label class="login-label" for="login-password">Password</label>
+            <div class="modal-field">
+                <label class="modal-label" for="login-password">Password</label>
                 <input type="password" class="modal-input" id="login-password" autocomplete="current-password">
             </div>
             <p class="login-error hidden" id="login-error"></p>
             <button class="btn btn-primary login-btn" id="login-submit">Log In</button>
             <div class="login-theme-row">
-                <label class="login-label" for="login-theme">Theme</label>
+                <label class="modal-label" for="login-theme">Theme</label>
                 <select class="search-select" id="login-theme"></select>
             </div>
         </div>
@@ -3551,29 +3551,29 @@ function showSetupScreen() {
     screen.classList.remove('hidden');
     document.getElementById('app').classList.add('hidden');
     screen.innerHTML = `
-        <div class="login-card">
+        <div class="modal-dialog">
             <h1 class="login-title">Welcome to Mail Hunter</h1>
             <p class="login-subtitle">Create your admin account to get started.</p>
-            <div class="login-field">
-                <label class="login-label" for="setup-username">Username</label>
+            <div class="modal-field">
+                <label class="modal-label" for="setup-username">Username</label>
                 <input type="text" class="modal-input" id="setup-username" autocomplete="username">
             </div>
-            <div class="login-field">
-                <label class="login-label" for="setup-display">Display Name</label>
+            <div class="modal-field">
+                <label class="modal-label" for="setup-display">Display Name</label>
                 <input type="text" class="modal-input" id="setup-display" placeholder="Optional" autocomplete="name">
             </div>
-            <div class="login-field">
-                <label class="login-label" for="setup-password">Password</label>
+            <div class="modal-field">
+                <label class="modal-label" for="setup-password">Password</label>
                 <input type="password" class="modal-input" id="setup-password" autocomplete="new-password">
             </div>
-            <div class="login-field">
-                <label class="login-label" for="setup-confirm">Confirm Password</label>
+            <div class="modal-field">
+                <label class="modal-label" for="setup-confirm">Confirm Password</label>
                 <input type="password" class="modal-input" id="setup-confirm" autocomplete="new-password">
             </div>
             <p class="login-error hidden" id="setup-error"></p>
             <button class="btn btn-primary login-btn" id="setup-submit">Create Account</button>
             <div class="login-theme-row">
-                <label class="login-label" for="login-theme">Theme</label>
+                <label class="modal-label" for="login-theme">Theme</label>
                 <select class="search-select" id="login-theme"></select>
             </div>
         </div>
