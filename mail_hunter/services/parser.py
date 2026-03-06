@@ -52,6 +52,8 @@ def parse_message(raw_bytes: bytes) -> dict:
             dt = email.utils.parsedate_to_datetime(candidate)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
             date_iso = dt.isoformat()
             break
         except (ValueError, TypeError):

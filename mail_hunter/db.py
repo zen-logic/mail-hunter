@@ -1,6 +1,11 @@
-import aiosqlite
+import logging
+from datetime import datetime, timezone
 from pathlib import Path
+
+import aiosqlite
 from mail_hunter.config import load_config
+
+log = logging.getLogger("mail_hunter")
 
 _db = None
 
@@ -176,6 +181,40 @@ INDEXES = [
 ]
 
 
+async def _migrate_dates_to_utc(db: aiosqlite.Connection):
+    """One-time migration: convert non-UTC date strings to UTC.
+
+    Dates with offsets like -08:00 sort incorrectly against +00:00 in
+    lexicographic ORDER BY.  Normalizing everything to UTC fixes this.
+    """
+    # Check if already done — look for any non-UTC dates
+    rows = await db.execute_fetchall(
+        "SELECT COUNT(*) as cnt FROM mails WHERE date IS NOT NULL AND date NOT LIKE '%+00:00'"
+    )
+    count = rows[0]["cnt"] if rows else 0
+    if count == 0:
+        return
+    log.info("Normalizing %d mail dates to UTC...", count)
+    rows = await db.execute_fetchall(
+        "SELECT id, date FROM mails WHERE date IS NOT NULL AND date NOT LIKE '%+00:00'"
+    )
+    updated = 0
+    for row in rows:
+        try:
+            dt = datetime.fromisoformat(row["date"])
+            utc_iso = dt.astimezone(timezone.utc).isoformat()
+            if utc_iso != row["date"]:
+                await db.execute(
+                    "UPDATE mails SET date=? WHERE id=?", (utc_iso, row["id"])
+                )
+                updated += 1
+        except (ValueError, TypeError):
+            continue
+    if updated:
+        await db.commit()
+    log.info("Normalized %d mail dates to UTC.", updated)
+
+
 async def init_db(db: aiosqlite.Connection):
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
@@ -194,6 +233,8 @@ async def init_db(db: aiosqlite.Connection):
     for idx_sql in INDEXES:
         await db.execute(idx_sql)
     await db.commit()
+    # One-time migration: normalize dates to UTC for correct lexicographic sort
+    await _migrate_dates_to_utc(db)
 
 
 async def close_db():
