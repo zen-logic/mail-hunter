@@ -974,6 +974,7 @@ async function doSearch() {
     selectedMailIds.clear();
     _anchorIdx = -1;
     const params = getSearchParams();
+    lastSearchParams = { ...params };
     params.sort = sortKey;
     params.sortDir = sortDirParam();
     params.page = currentPage;
@@ -1004,6 +1005,7 @@ async function doSearch() {
 const mailFilter = document.getElementById('mail-filter');
 let currentMails = [];
 let customMailView = false; // true when showing search results, duplicates, thread, etc.
+let lastSearchParams = null; // preserved search params for select-all across pages
 let sortKey = 'date';
 let sortDir = -1; // 1=asc, -1=desc
 let currentPage = 0;
@@ -1702,6 +1704,7 @@ function renderServers(servers) {
 
 function clearSelection() {
     customMailView = false;
+    lastSearchParams = null;
     selectedServerId = null;
     selectedFolder = null;
     selectedMailId = null;
@@ -2038,6 +2041,7 @@ async function renderServerDetail() {
 async function loadMails() {
     if (!selectedServerId) return;
     customMailView = false;
+    lastSearchParams = null;
     selectedMailIds.clear();
     _anchorIdx = -1;
     const container = document.getElementById('mail-content');
@@ -2131,9 +2135,8 @@ async function _fetchAllIds() {
     // Fetch all mail IDs for the current view (search or folder browse)
     try {
         let url;
-        if (customMailView) {
-            const params = getSearchParams();
-            params.ids_only = '1';
+        if (customMailView && lastSearchParams) {
+            const params = { ...lastSearchParams, ids_only: '1' };
             url = `/api/mails/search?${new URLSearchParams(params)}`;
         } else if (selectedServerId) {
             const params = new URLSearchParams({ ids_only: '1' });
