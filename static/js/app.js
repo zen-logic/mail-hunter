@@ -59,6 +59,42 @@ function showConfirm(message, { title = 'Confirm', okLabel = 'Delete', okClass =
     });
 }
 
+// ── Prompt dialog ─────────────────────────────────────
+
+function showPrompt(message, { title = 'Input', okLabel = 'Save', placeholder = '' } = {}) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('prompt-modal');
+        document.getElementById('prompt-title').textContent = title;
+        document.getElementById('prompt-message').textContent = message;
+        const input = document.getElementById('prompt-input');
+        const okBtn = document.getElementById('prompt-ok');
+        const cancelBtn = document.getElementById('prompt-cancel');
+        okBtn.textContent = okLabel;
+        input.value = '';
+        input.placeholder = placeholder;
+        modal.classList.remove('hidden');
+        input.focus();
+
+        function cleanup(result) {
+            modal.classList.add('hidden');
+            okBtn.removeEventListener('click', onOk);
+            cancelBtn.removeEventListener('click', onCancel);
+            input.removeEventListener('keydown', onKey);
+            modal.removeEventListener('click', onBackdrop);
+            resolve(result);
+        }
+        function onOk() { const v = input.value.trim(); if (v) cleanup(v); }
+        function onCancel() { cleanup(null); }
+        function onKey(e) { if (e.key === 'Enter') onOk(); if (e.key === 'Escape') onCancel(); }
+        function onBackdrop(e) { if (e.target === modal) cleanup(null); }
+
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+        input.addEventListener('keydown', onKey);
+        modal.addEventListener('click', onBackdrop);
+    });
+}
+
 // ── Message preview dialog ─────────────────────────────
 
 function showMessagePreview(mail, bodyText, bodyHtml, rawSource) {
@@ -837,7 +873,7 @@ function renderSavedSearches(searches) {
 document.getElementById('search-save').addEventListener('click', async () => {
     const params = getSearchParams();
     if (!Object.keys(params).length) return;
-    const name = prompt('Save search as:');
+    const name = await showPrompt('Save search as:', { title: 'Save Search', placeholder: 'Search name...' });
     if (!name) return;
     try {
         await fetch('/api/searches', {
@@ -2612,7 +2648,7 @@ for (const [key, el] of Object.entries(panelElements)) {
 
 // ── Modal helpers ───────────────────────────────────────
 
-const modalIds = ['preview-modal', 'confirm-modal', 'settings-modal', 'import-modal', 'about-modal'];
+const modalIds = ['prompt-modal', 'preview-modal', 'confirm-modal', 'settings-modal', 'import-modal', 'about-modal'];
 
 function getTopmostModal() {
     for (const id of modalIds) {
@@ -2625,7 +2661,9 @@ function getTopmostModal() {
 function closeModal(modal) {
     if (!modal) return;
     const id = modal.id;
-    if (id === 'preview-modal') {
+    if (id === 'prompt-modal') {
+        document.getElementById('prompt-cancel')?.click();
+    } else if (id === 'preview-modal') {
         document.getElementById('preview-close')?.click();
     } else if (id === 'confirm-modal') {
         document.getElementById('confirm-cancel')?.click();

@@ -170,6 +170,23 @@
         </div>
     </div>
 
+    <!-- Prompt dialog -->
+    <div class="modal-overlay hidden" id="prompt-modal">
+        <div class="modal-dialog modal-dialog-sm">
+            <div class="settings-header">
+                <span class="modal-title" id="prompt-title">Input</span>
+            </div>
+            <div class="confirm-body">
+                <p id="prompt-message"></p>
+                <input type="text" class="modal-input" id="prompt-input" style="width:100%">
+                <div class="confirm-actions" style="margin-top:0.75rem">
+                    <button class="btn btn-sm" id="prompt-cancel">Cancel</button>
+                    <button class="btn btn-sm btn-primary" id="prompt-ok">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Confirm dialog -->
     <div class="modal-overlay hidden" id="confirm-modal">
         <div class="modal-dialog modal-dialog-sm">
