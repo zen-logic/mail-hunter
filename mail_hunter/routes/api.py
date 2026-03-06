@@ -5,7 +5,9 @@ import email.policy
 import io
 import json
 import logging
+import mailbox
 import re
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -1124,6 +1126,72 @@ async def batch_export(request: Request):
         media_type="application/zip",
         headers={
             "Content-Disposition": 'attachment; filename="mail-hunter-export.zip"'
+        },
+    )
+
+
+# ── Archive Export ──────────────────────────────────────
+
+
+async def export_folder_mbox(request: Request):
+    """Export all messages in an archive folder as an MBOX file."""
+    server_id = request.path_params["server_id"]
+    folder_name = request.query_params.get("folder", "").strip()
+    if not folder_name:
+        return JSONResponse({"error": "folder parameter required"}, status_code=400)
+
+    db = await get_db()
+
+    # Validate server is an archive
+    row = await db.execute_fetchall(
+        "SELECT protocol FROM servers WHERE id = ?", (server_id,)
+    )
+    if not row:
+        return JSONResponse({"error": "server not found"}, status_code=404)
+    if row[0]["protocol"] != "archive":
+        return JSONResponse({"error": "server is not an archive"}, status_code=400)
+
+    # Look up folder
+    folder_row = await db.execute_fetchall(
+        "SELECT id FROM folders WHERE server_id = ? AND name = ?",
+        (server_id, folder_name),
+    )
+    if not folder_row:
+        return JSONResponse({"error": "folder not found"}, status_code=404)
+    folder_id = folder_row[0]["id"]
+
+    rows = await db.execute_fetchall(
+        "SELECT id, raw_path FROM mails WHERE folder_id = ?", (folder_id,)
+    )
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mbox")
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        mbox = mailbox.mbox(tmp_path)
+        for r in rows:
+            if not r["raw_path"]:
+                continue
+            try:
+                raw = read_raw(r["raw_path"])
+            except FileNotFoundError:
+                continue
+            msg = email.message_from_bytes(raw, policy=email.policy.compat32)
+            mbox.add(msg)
+        mbox.close()
+
+        data = Path(tmp_path).read_bytes()
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    safe_name = "".join(
+        c if c.isalnum() or c in " -_." else "_" for c in folder_name
+    )[:50]
+    return Response(
+        data,
+        media_type="application/mbox",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}.mbox"'
         },
     )
 

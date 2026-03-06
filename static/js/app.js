@@ -1783,6 +1783,7 @@ async function renderServerDetail() {
             <div class="detail-section">
                 <div class="detail-btn-group">
                     ${!isArchive && !isImport && !syncing ? `<button class="btn" id="btn-sync-folder">Sync Folder</button>` : ''}
+                    ${isArchive && msgCount > 0 ? `<button class="btn" id="btn-export-mbox">Export MBOX</button>` : ''}
                     <button class="btn btn-danger" id="btn-delete-folder-msgs">${isArchive ? 'Delete Folder' : 'Delete Messages'}</button>
                 </div>
             </div>
@@ -1800,6 +1801,10 @@ async function renderServerDetail() {
             } catch (err) {
                 ActivityLog.add(`Sync failed: ${err.message}`);
             }
+        });
+
+        document.getElementById('btn-export-mbox')?.addEventListener('click', () => {
+            window.location.href = `/api/archives/${server.id}/folders/export?folder=${encodeURIComponent(selectedFolder)}`;
         });
 
         document.getElementById('btn-delete-folder-msgs')?.addEventListener('click', async () => {
@@ -1932,6 +1937,10 @@ async function renderServerDetail() {
 
     // Full sync (reset sync state, re-walk UIDs, skip existing)
     document.getElementById('btn-full-sync')?.addEventListener('click', async () => {
+        if (!await showConfirm(
+            `This will re-download all messages from the server. Messages already stored will be skipped. This can take a long time.`,
+            { title: 'Full Sync', okLabel: 'Full Sync' }
+        )) return;
         try {
             const resp = await fetch(`/api/servers/${server.id}/sync?full=1`, { method: 'POST' });
             if (resp.ok) {
@@ -1948,7 +1957,7 @@ async function renderServerDetail() {
     // Delete & re-sync (purge all mails, reset sync state, re-download)
     document.getElementById('btn-purge-sync')?.addEventListener('click', async () => {
         if (!await showConfirm(
-            `Delete all messages for "${server.name}" and re-download from server?`,
+            `This will delete all messages for "${server.name}" and re-download everything from scratch. You will lose any tags, holds, and archive copies.`,
             { title: 'Delete & Re-sync', okLabel: 'Delete & Re-sync', okClass: 'btn-danger' }
         )) return;
         if (server.id === selectedServerId) {

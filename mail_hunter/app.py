@@ -42,6 +42,7 @@ from mail_hunter.routes.api import (
     create_archive,
     create_archive_folder,
     delete_archive_folder,
+    export_folder_mbox,
     batch_move,
     batch_copy,
 )
@@ -159,6 +160,11 @@ routes = [
     WebSocketRoute("/ws", ws_endpoint),
     # Archive routes
     Route("/api/archives", create_archive, methods=["POST"]),
+    Route(
+        "/api/archives/{server_id:int}/folders/export",
+        export_folder_mbox,
+        methods=["GET"],
+    ),
     Route(
         "/api/archives/{server_id:int}/folders",
         create_archive_folder,
