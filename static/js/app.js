@@ -1647,11 +1647,10 @@ function renderServers(servers) {
         const totalMsgs = (s.folders || []).reduce((sum, f) => sum + (f.count || 0), 0);
         const folderCnt = (s.folders || []).length;
         const summary = `<span class="server-summary">${totalMsgs.toLocaleString()} messages, ${folderCnt} folders</span>`;
-        const addFolderBtn = isArchive ? `<button class="btn btn-sm archive-folder-btn" data-archive-add="${s.id}" title="New Folder">+</button>` : '';
         html += `<div class="server-item${sel}" data-id="${s.id}">
             ${chevron}
             <span class="server-label">${esc(s.name)}${summary}</span>
-            ${syncBadge}${addFolderBtn}
+            ${syncBadge}
         </div>`;
         if (hasFolders && !isCollapsed) {
             const tree = buildFolderTree(s.folders);
@@ -1694,30 +1693,6 @@ function renderServers(servers) {
                 await fetch(`/api/servers/${sid}/sync/queue`, { method: 'DELETE' });
             } catch (err) {
                 console.error('Dequeue failed:', err);
-            }
-        });
-    });
-    container.querySelectorAll('[data-archive-add]').forEach(el => {
-        el.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const sid = parseInt(el.dataset.archiveAdd);
-            const name = await showPrompt('Folder name:', { title: 'New Folder', placeholder: 'Projects/2024' });
-            if (!name) return;
-            try {
-                const resp = await fetch(`/api/archives/${sid}/folders`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name }),
-                });
-                if (resp.ok) {
-                    ActivityLog.add(`Folder created: ${name}`);
-                    loadServers();
-                } else {
-                    const err = await resp.json();
-                    ActivityLog.add(`Create folder failed: ${err.error}`);
-                }
-            } catch (err) {
-                console.error('Create folder failed:', err);
             }
         });
     });
