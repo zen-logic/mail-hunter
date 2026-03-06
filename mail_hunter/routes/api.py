@@ -872,6 +872,63 @@ async def get_version(request: Request):
     return JSONResponse({"version": __version__})
 
 
+async def get_mail_duplicates(request: Request):
+    """Return other mails with the same message_id or content_hash."""
+    mail_id = request.path_params["mail_id"]
+    sort_col, sort_col_m, sort_dir, page = _sort_params(request)
+    db = await get_db()
+
+    row = await db.execute_fetchall(
+        "SELECT message_id, content_hash FROM mails WHERE id = ?", (mail_id,)
+    )
+    if not row:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    message_id = row[0]["message_id"]
+    content_hash = row[0]["content_hash"]
+
+    # Prefer message_id match, fall back to content_hash
+    if message_id:
+        match_clause = "m.message_id = ?"
+        match_param = message_id
+    elif content_hash:
+        match_clause = "m.content_hash = ?"
+        match_param = content_hash
+    else:
+        return JSONResponse(
+            {"items": [], "total": 0, "page": 0, "pageSize": PAGE_SIZE}
+        )
+
+    where = f"{match_clause} AND m.id != ?"
+    params = [match_param, mail_id]
+
+    count_row = await db.execute_fetchall(
+        f"SELECT COUNT(*) as cnt FROM mails m WHERE {where}", params
+    )
+    total = count_row[0]["cnt"] if count_row else 0
+
+    rows = await db.execute_fetchall(
+        "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, "
+        "m.size, m.unread, m.attachment_count, m.legal_hold, m.dup_count, "
+        "s.name AS server_name, f.name AS folder_name "
+        "FROM mails m "
+        "LEFT JOIN servers s ON m.server_id = s.id "
+        "LEFT JOIN folders f ON m.folder_id = f.id "
+        f"WHERE {where} ORDER BY {sort_col_m} {sort_dir} "
+        f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
+        params,
+    )
+
+    return JSONResponse(
+        {
+            "items": [dict(r) for r in rows],
+            "total": total,
+            "page": page,
+            "pageSize": PAGE_SIZE,
+        }
+    )
+
+
 async def batch_export(request: Request):
     """Export multiple mails as a zip of .eml files."""
     data = await request.json()

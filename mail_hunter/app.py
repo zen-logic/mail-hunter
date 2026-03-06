@@ -33,6 +33,7 @@ from mail_hunter.routes.api import (
     toggle_hold,
     get_stats,
     get_version,
+    get_mail_duplicates,
 )
 from mail_hunter.routes.import_mail import import_upload
 from mail_hunter.routes.sync import (
@@ -185,6 +186,11 @@ routes = [
     Route(
         "/api/mails/{mail_id:int}/attachments/{index:int}",
         get_mail_attachment,
+        methods=["GET"],
+    ),
+    Route(
+        "/api/mails/{mail_id:int}/duplicates",
+        get_mail_duplicates,
         methods=["GET"],
     ),
     Route("/api/mails/{mail_id:int}/hold", toggle_hold, methods=["PUT"]),
