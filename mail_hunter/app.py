@@ -39,6 +39,9 @@ from mail_hunter.routes.api import (
     list_saved_searches,
     create_saved_search,
     delete_saved_search,
+    create_archive,
+    create_archive_folder,
+    delete_archive_folder,
 )
 from mail_hunter.routes.import_mail import import_upload
 from mail_hunter.routes.sync import (
@@ -96,7 +99,7 @@ async def on_startup():
     )
     for r in rows:
         server = dict(r)
-        if server["protocol"] == "import":
+        if server["protocol"] in ("import", "archive"):
             await db.execute(
                 "UPDATE servers SET syncing = 0 WHERE id = ?", (server["id"],)
             )
@@ -152,6 +155,18 @@ async def on_shutdown():
 routes = [
     Route("/", homepage),
     WebSocketRoute("/ws", ws_endpoint),
+    # Archive routes
+    Route("/api/archives", create_archive, methods=["POST"]),
+    Route(
+        "/api/archives/{server_id:int}/folders",
+        create_archive_folder,
+        methods=["POST"],
+    ),
+    Route(
+        "/api/archives/{server_id:int}/folders",
+        delete_archive_folder,
+        methods=["DELETE"],
+    ),
     # Server sub-routes (more specific paths first)
     Route("/api/servers/{server_id:int}/sync", sync_endpoint, methods=["GET", "POST"]),
     Route("/api/servers/{server_id:int}/sync/cancel", stop_sync, methods=["POST"]),

@@ -59,7 +59,7 @@ def _sort_params(request):
 async def list_servers(request: Request):
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT id, name, host, port, username, last_sync, is_gmail, sync_enabled, sync_interval FROM servers ORDER BY name COLLATE NOCASE"
+        "SELECT id, name, host, port, username, last_sync, is_gmail, sync_enabled, sync_interval, protocol FROM servers ORDER BY name COLLATE NOCASE"
     )
     # Fetch all folders with counts in one query (avoids N+1)
     all_folders = await db.execute_fetchall(
@@ -90,6 +90,7 @@ async def list_servers(request: Request):
                 "is_gmail": bool(r["is_gmail"]),
                 "sync_enabled": bool(r["sync_enabled"]),
                 "sync_interval": r["sync_interval"],
+                "protocol": r["protocol"] or "imap",
                 "syncing": is_syncing(r["id"]),
                 "folders": folders_by_server.get(r["id"], []),
             }
@@ -143,8 +144,8 @@ async def update_server(request: Request):
     except (ValueError, TypeError):
         sync_interval = 15
 
-    if row[0]["protocol"] == "import":
-        # Import servers: only the name can be updated
+    if row[0]["protocol"] in ("import", "archive"):
+        # Import/archive servers: only the name can be updated
         if not name:
             return JSONResponse({"error": "name required"}, status_code=400)
         await db.execute(
@@ -1092,3 +1093,98 @@ async def batch_export(request: Request):
             "Content-Disposition": 'attachment; filename="mail-hunter-export.zip"'
         },
     )
+
+
+# ── Archive CRUD ────────────────────────────────────────
+
+
+async def create_archive(request: Request):
+    """Create a new archive container (a server row with protocol='archive')."""
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        return JSONResponse({"error": "name required"}, status_code=400)
+
+    request_write_lock()
+    db = await get_db()
+    cursor = await db.execute(
+        "INSERT INTO servers (name, host, port, username, password, protocol) "
+        "VALUES (?, '', 0, '', '', 'archive')",
+        (name,),
+    )
+    await db.commit()
+    return JSONResponse({"id": cursor.lastrowid}, status_code=201)
+
+
+async def create_archive_folder(request: Request):
+    """Create a folder inside an archive server."""
+    server_id = request.path_params["server_id"]
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        return JSONResponse({"error": "name required"}, status_code=400)
+
+    db = await get_db()
+
+    # Validate server is an archive
+    row = await db.execute_fetchall(
+        "SELECT protocol FROM servers WHERE id = ?", (server_id,)
+    )
+    if not row:
+        return JSONResponse({"error": "server not found"}, status_code=404)
+    if row[0]["protocol"] != "archive":
+        return JSONResponse({"error": "server is not an archive"}, status_code=400)
+
+    # Check for duplicate folder name
+    existing = await db.execute_fetchall(
+        "SELECT id FROM folders WHERE server_id = ? AND name = ?",
+        (server_id, name),
+    )
+    if existing:
+        return JSONResponse({"error": "folder already exists"}, status_code=409)
+
+    request_write_lock()
+    cursor = await db.execute(
+        "INSERT INTO folders (server_id, name) VALUES (?, ?)",
+        (server_id, name),
+    )
+    await db.commit()
+    return JSONResponse({"id": cursor.lastrowid}, status_code=201)
+
+
+async def delete_archive_folder(request: Request):
+    """Delete a folder and its messages from an archive server."""
+    server_id = request.path_params["server_id"]
+    folder_name = request.query_params.get("folder", "").strip()
+    if not folder_name:
+        return JSONResponse({"error": "folder parameter required"}, status_code=400)
+
+    db = await get_db()
+
+    # Validate server is an archive
+    row = await db.execute_fetchall(
+        "SELECT protocol FROM servers WHERE id = ?", (server_id,)
+    )
+    if not row:
+        return JSONResponse({"error": "server not found"}, status_code=404)
+    if row[0]["protocol"] != "archive":
+        return JSONResponse({"error": "server is not an archive"}, status_code=400)
+
+    # Look up folder
+    folder_row = await db.execute_fetchall(
+        "SELECT id FROM folders WHERE server_id = ? AND name = ?",
+        (server_id, folder_name),
+    )
+    if not folder_row:
+        return JSONResponse({"error": "folder not found"}, status_code=404)
+    folder_id = folder_row[0]["id"]
+
+    count_row = await db.execute_fetchall(
+        "SELECT COUNT(*) as cnt FROM mails WHERE folder_id = ?", (folder_id,)
+    )
+    mail_count = count_row[0]["cnt"] if count_row else 0
+
+    asyncio.create_task(
+        _delete_folder_task(server_id, folder_id, folder_name, mail_count)
+    )
+    return JSONResponse({"ok": True})
