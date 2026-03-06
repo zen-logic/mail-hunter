@@ -740,8 +740,10 @@ async function doSearch() {
     params.sort = sortKey;
     params.sortDir = sortDirParam();
     params.page = currentPage;
+    const container = document.getElementById('mail-content');
     const countEl = document.getElementById('mail-count');
     const titleEl = document.getElementById('mail-panel-title');
+    container.innerHTML = '<div class="empty-state"><div class="spinner"></div></div>';
     try {
         const qs = new URLSearchParams(params).toString();
         const resp = await fetch(`/api/mails/search?${qs}`);
@@ -1719,6 +1721,7 @@ async function loadMails() {
     const titleEl = document.getElementById('mail-panel-title');
     titleEl.textContent = 'Messages';
     mailFilter.value = '';
+    container.innerHTML = '<div class="empty-state"><div class="spinner"></div></div>';
     try {
         const params = new URLSearchParams({
             sort: sortKey,
