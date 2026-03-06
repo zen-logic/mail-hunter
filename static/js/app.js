@@ -673,7 +673,7 @@ serverFilter.addEventListener('keydown', (e) => {
 
 const searchPanel = document.getElementById('search-panel');
 const searchToggleBtn = document.getElementById('btn-search');
-const searchFields = ['search-from', 'search-to', 'search-subject', 'search-body', 'search-date-from', 'search-date-to', 'search-tag', 'search-held', 'search-has-dups', 'search-server'];
+const searchFields = ['search-from', 'search-to', 'search-subject', 'search-body', 'search-date-from', 'search-date-to', 'search-attachment', 'search-tag', 'search-held', 'search-has-dups', 'search-server'];
 
 searchToggleBtn.addEventListener('click', () => {
     const visible = !searchPanel.classList.contains('hidden');
@@ -694,9 +694,11 @@ function getSearchParams() {
     if (to) params.to = to;
     if (subject) params.subject = subject;
     if (body) params.body = body;
+    const attachment = document.getElementById('search-attachment').value.trim();
     const tag = document.getElementById('search-tag').value.trim();
     if (dateFrom) params.date_from = dateFrom;
     if (dateTo) params.date_to = dateTo;
+    if (attachment) params.attachment = attachment;
     if (tag) params.tag = tag;
     const held = document.getElementById('search-held').checked;
     if (held) params.held = '1';
@@ -710,7 +712,7 @@ function getSearchParams() {
 
 function hasSearchParams() {
     const p = getSearchParams();
-    return p.from || p.to || p.subject || p.body || p.date_from || p.date_to || p.tag || p.held || p.has_dups;
+    return p.from || p.to || p.subject || p.body || p.date_from || p.date_to || p.attachment || p.tag || p.held || p.has_dups;
 }
 
 document.getElementById('search-go').addEventListener('click', () => {

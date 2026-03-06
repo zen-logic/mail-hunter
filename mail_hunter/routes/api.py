@@ -371,8 +371,9 @@ async def search_mails(request: Request):
     held_q = request.query_params.get("held", "").strip()
 
     has_dups = request.query_params.get("has_dups", "").strip()
+    attachment_q = request.query_params.get("attachment", "").strip()
 
-    if not any([from_q, to_q, subject_q, body_q, date_from, date_to, tag_q, held_q, has_dups]):
+    if not any([from_q, to_q, subject_q, body_q, date_from, date_to, tag_q, held_q, has_dups, attachment_q]):
         return JSONResponse({"items": [], "total": 0, "page": 0, "pageSize": PAGE_SIZE})
 
     conditions = []
@@ -419,6 +420,12 @@ async def search_mails(request: Request):
 
     if has_dups:
         conditions.append("dup_count > 0")
+
+    if attachment_q:
+        conditions.append(
+            "EXISTS (SELECT 1 FROM attachments a WHERE a.mail_id = mails.id AND a.filename LIKE ?)"
+        )
+        params.append(f"%{attachment_q}%")
 
     where = " AND ".join(conditions)
     sort_col, _sort_col_m, sort_dir, page = _sort_params(request)

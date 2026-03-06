@@ -179,6 +179,7 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_tags_mail_id ON tags(mail_id)",
     "CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag)",
     "CREATE INDEX IF NOT EXISTS idx_mails_folder_id ON mails(folder_id)",
+    "CREATE INDEX IF NOT EXISTS idx_attachments_mail_id ON attachments(mail_id)",
 ]
 
 
