@@ -824,6 +824,20 @@ async def _refresh_archive_size():
     _archive_size_cache["value"] = await asyncio.to_thread(_archive_disk_usage)
 
 
+async def get_server_stats(request: Request):
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT s.id, s.name, "
+        "COUNT(m.id) AS messages, "
+        "COALESCE(SUM(CASE WHEN m.dup_count > 0 THEN 1 ELSE 0 END), 0) AS duplicates, "
+        "COALESCE(SUM(CASE WHEN m.legal_hold = 1 THEN 1 ELSE 0 END), 0) AS held, "
+        "COALESCE(SUM(m.raw_size), 0) AS total_size "
+        "FROM servers s LEFT JOIN mails m ON m.server_id = s.id "
+        "GROUP BY s.id, s.name ORDER BY s.name COLLATE NOCASE"
+    )
+    return JSONResponse([dict(r) for r in rows])
+
+
 async def get_stats(request: Request):
     db = await get_db()
     row = await db.execute_fetchall(

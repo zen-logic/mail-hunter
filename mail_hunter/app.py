@@ -32,6 +32,7 @@ from mail_hunter.routes.api import (
     batch_export,
     toggle_hold,
     get_stats,
+    get_server_stats,
     get_version,
     get_mail_duplicates,
     list_saved_searches,
@@ -204,6 +205,7 @@ routes = [
     Route("/api/searches", create_saved_search, methods=["POST"]),
     Route("/api/searches/{search_id:int}", delete_saved_search, methods=["DELETE"]),
     # Stats / version
+    Route("/api/stats/servers", get_server_stats, methods=["GET"]),
     Route("/api/stats", get_stats, methods=["GET"]),
     Route("/api/version", get_version, methods=["GET"]),
     # Import

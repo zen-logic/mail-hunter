@@ -587,7 +587,36 @@ function renderGlobalStats() {
                 </div>
             </div>
         </div>
+        <div class="detail-section">
+            <h3>Per Server</h3>
+            <div id="server-stats-content"><div class="spinner"></div></div>
+        </div>
     `;
+
+    // Load per-server stats
+    fetch('/api/stats/servers').then(r => r.json()).then(servers => {
+        const el = document.getElementById('server-stats-content');
+        if (!el) return;
+        if (!servers.length) {
+            el.innerHTML = '<span class="text-muted">No servers</span>';
+            return;
+        }
+        el.innerHTML = `<table class="server-stats-table">
+            <thead><tr><th>Server</th><th>Messages</th><th>Dups</th><th>Held</th><th>Size</th></tr></thead>
+            <tbody>${servers.map(sv =>
+                `<tr>
+                    <td><a class="server-stats-link" data-server-id="${sv.id}">${esc(sv.name)}</a></td>
+                    <td>${sv.messages.toLocaleString()}</td>
+                    <td>${sv.duplicates.toLocaleString()}</td>
+                    <td>${sv.held.toLocaleString()}</td>
+                    <td>${formatSize(sv.total_size)}</td>
+                </tr>`
+            ).join('')}</tbody>
+        </table>`;
+        el.querySelectorAll('.server-stats-link').forEach(link => {
+            link.addEventListener('click', () => selectServer(parseInt(link.dataset.serverId)));
+        });
+    }).catch(() => {});
 }
 
 // ── Sync status ─────────────────────────────────────────
