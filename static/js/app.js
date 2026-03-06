@@ -906,6 +906,20 @@ function toggleSort(key) {
     _anchorIdx = -1;
     if (hasSearchParams()) {
         doSearch();
+    } else if (customMailView) {
+        // Re-sort in-memory results (thread, duplicates)
+        const col = key === 'from' ? m => (m.from_name || m.from_addr || '').toLowerCase()
+            : key === 'to' ? m => (m.to_addr || '').toLowerCase()
+            : key === 'subject' ? m => (m.subject || '').toLowerCase()
+            : key === 'size' ? m => m.size || 0
+            : m => m.date || '';
+        currentMails.sort((a, b) => {
+            const va = col(a), vb = col(b);
+            if (va < vb) return -sortDir;
+            if (va > vb) return sortDir;
+            return 0;
+        });
+        applyFilterAndRender();
     } else {
         loadMails();
     }
