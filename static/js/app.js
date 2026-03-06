@@ -992,6 +992,8 @@ async function doSearch() {
         countEl.textContent = data.total ? `(${data.total})` : '';
         currentMails = data.items;
         applyFilterAndRender();
+        selectedMailId = null;
+        renderSearchDetail();
     } catch (err) {
         console.error('Search failed:', err);
     }
@@ -2383,6 +2385,37 @@ function _hasArchiveFolders() {
 }
 
 // ── Detail panel ────────────────────────────────────────
+
+function renderSearchDetail() {
+    const container = document.getElementById('detail-content');
+    const params = getSearchParams();
+    const lines = [];
+    if (params.from) lines.push(`<tr><td class="detail-label">From</td><td>${esc(params.from)}</td></tr>`);
+    if (params.to) lines.push(`<tr><td class="detail-label">To</td><td>${esc(params.to)}</td></tr>`);
+    if (params.subject) lines.push(`<tr><td class="detail-label">Subject</td><td>${esc(params.subject)}</td></tr>`);
+    if (params.body) lines.push(`<tr><td class="detail-label">Body</td><td>${esc(params.body)}</td></tr>`);
+    if (params.date_from || params.date_to) {
+        const range = [params.date_from || '...', params.date_to || '...'].join(' \u2013 ');
+        lines.push(`<tr><td class="detail-label">Date</td><td>${esc(range)}</td></tr>`);
+    }
+    if (params.attachment) lines.push(`<tr><td class="detail-label">Attachment</td><td>${esc(params.attachment)}</td></tr>`);
+    if (params.tag) lines.push(`<tr><td class="detail-label">Tag</td><td>${esc(params.tag)}</td></tr>`);
+    if (params.held) lines.push(`<tr><td class="detail-label">Held</td><td>Yes</td></tr>`);
+    if (params.has_dups) lines.push(`<tr><td class="detail-label">Duplicates</td><td>Yes</td></tr>`);
+    if (params.server_id) {
+        const srv = allServers.find(s => String(s.id) === String(params.server_id));
+        lines.push(`<tr><td class="detail-label">Server</td><td>${esc(srv ? srv.name : params.server_id)}</td></tr>`);
+    }
+    container.innerHTML = `
+        <div class="detail-section">
+            <h3>Search Criteria</h3>
+            <table class="detail-table">${lines.join('')}</table>
+        </div>
+        <div class="detail-section">
+            <div class="text-muted">${totalMails} result${totalMails !== 1 ? 's' : ''}</div>
+        </div>
+    `;
+}
 
 function renderDetail(mail) {
     if (!mail) {
