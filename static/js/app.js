@@ -2677,7 +2677,7 @@ function renderMultiSelect() {
     const totalSize = knownSelected.reduce((sum, m) => sum + (m.size || 0), 0);
     const remainingCount = selectedMailIds.size - knownSelected.length;
 
-    const MAX_SHOWN = 10;
+    const MAX_SHOWN = 6;
     const shown = knownSelected.slice(0, MAX_SHOWN);
     const moreCount = selectedMailIds.size - shown.length;
 
