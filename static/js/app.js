@@ -337,7 +337,7 @@ function handleWSMessage(msg) {
                 });
             } else {
                 loadServers();
-                if (selectedServerId) loadMails();
+                if (selectedServerId && !hasSearchParams()) loadMails();
             }
             break;
         case 'import_error':
@@ -351,7 +351,7 @@ function handleWSMessage(msg) {
             loadServers();
             if (msg.server_id === selectedServerId) {
                 currentPage = 0;
-                if (fullSyncServerId !== msg.server_id) loadMails();
+                if (fullSyncServerId !== msg.server_id && !hasSearchParams()) loadMails();
                 renderServerDetail();
             }
             break;
@@ -403,7 +403,7 @@ function handleWSMessage(msg) {
             if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
             loadStats().then(() => { if (!selectedServerId) renderGlobalStats(); });
             loadServers().then(() => {
-                if (msg.server_id === selectedServerId) {
+                if (msg.server_id === selectedServerId && !hasSearchParams()) {
                     loadMails();
                     renderServerDetail();
                 }
@@ -416,7 +416,7 @@ function handleWSMessage(msg) {
             if (fullSyncServerId === msg.server_id) fullSyncServerId = null;
             if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
             loadServers();
-            if (msg.server_id === selectedServerId) {
+            if (msg.server_id === selectedServerId && !hasSearchParams()) {
                 loadMails();
                 renderServerDetail();
             } else if (!selectedServerId) {
