@@ -55,7 +55,7 @@ async def broadcast(msg: dict):
 
     payload = json.dumps(msg)
     dead = []
-    for ws in clients:
+    for ws in list(clients):
         try:
             await ws.send_text(payload)
         except Exception:
