@@ -42,6 +42,8 @@ from mail_hunter.routes.api import (
     create_archive,
     create_archive_folder,
     delete_archive_folder,
+    batch_move,
+    batch_copy,
 )
 from mail_hunter.routes.import_mail import import_upload
 from mail_hunter.routes.sync import (
@@ -198,6 +200,8 @@ routes = [
     Route("/api/mails/batch/delete", batch_delete, methods=["POST"]),
     Route("/api/mails/batch/tags", batch_tags, methods=["POST"]),
     Route("/api/mails/batch/hold", batch_hold, methods=["POST"]),
+    Route("/api/mails/batch/move", batch_move, methods=["POST"]),
+    Route("/api/mails/batch/copy", batch_copy, methods=["POST"]),
     Route("/api/mails/batch/export", batch_export, methods=["POST"]),
     Route("/api/mails/{mail_id:int}", get_mail, methods=["GET"]),
     Route("/api/mails/{mail_id:int}", delete_mail, methods=["DELETE"]),

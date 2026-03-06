@@ -16,6 +16,7 @@ from mail_hunter.config import encrypt_password
 from mail_hunter.db import get_db, open_connection, request_write_lock
 from mail_hunter.services.imap import is_syncing
 from mail_hunter.services.parser import _extract_body, _extract_body_html
+from mail_hunter.services.dedup import recalculate_dup_counts
 from mail_hunter.services.store import (
     extract_attachment_from_path,
     read_raw,
@@ -1188,3 +1189,136 @@ async def delete_archive_folder(request: Request):
         _delete_folder_task(server_id, folder_id, folder_name, mail_count)
     )
     return JSONResponse({"ok": True})
+
+
+# ── Move & Copy ─────────────────────────────────────────
+
+
+async def _validate_archive_target(db, server_id, folder_id):
+    """Validate target server is archive and folder exists. Returns error response or None."""
+    row = await db.execute_fetchall(
+        "SELECT protocol FROM servers WHERE id = ?", (server_id,)
+    )
+    if not row:
+        return JSONResponse({"error": "target server not found"}, status_code=404)
+    if row[0]["protocol"] != "archive":
+        return JSONResponse(
+            {"error": "target server is not an archive"}, status_code=400
+        )
+    folder_row = await db.execute_fetchall(
+        "SELECT id FROM folders WHERE id = ? AND server_id = ?",
+        (folder_id, server_id),
+    )
+    if not folder_row:
+        return JSONResponse({"error": "target folder not found"}, status_code=404)
+    return None
+
+
+async def batch_move(request: Request):
+    """Move messages to an archive folder."""
+    data = await request.json()
+    mail_ids = data.get("mail_ids", [])
+    server_id = data.get("server_id")
+    folder_id = data.get("folder_id")
+    if not mail_ids or not server_id or not folder_id:
+        return JSONResponse(
+            {"error": "mail_ids, server_id, folder_id required"}, status_code=400
+        )
+
+    request_write_lock()
+    db = await get_db()
+
+    err = await _validate_archive_target(db, server_id, folder_id)
+    if err:
+        return err
+
+    # Collect affected message_ids before move (for dup_count recalc)
+    placeholders = ",".join("?" for _ in mail_ids)
+    rows = await db.execute_fetchall(
+        f"SELECT message_id FROM mails WHERE id IN ({placeholders})",
+        mail_ids,
+    )
+    message_ids = [r["message_id"] for r in rows if r["message_id"]]
+
+    cursor = await db.execute(
+        f"UPDATE mails SET server_id = ?, folder_id = ? WHERE id IN ({placeholders})",
+        [server_id, folder_id] + mail_ids,
+    )
+    await db.commit()
+
+    # Recalculate dup_counts in background
+    if message_ids:
+        conn = await open_connection()
+        asyncio.create_task(_bg_recalc(conn, message_ids))
+
+    return JSONResponse({"moved": cursor.rowcount})
+
+
+async def batch_copy(request: Request):
+    """Copy messages to an archive folder."""
+    data = await request.json()
+    mail_ids = data.get("mail_ids", [])
+    server_id = data.get("server_id")
+    folder_id = data.get("folder_id")
+    if not mail_ids or not server_id or not folder_id:
+        return JSONResponse(
+            {"error": "mail_ids, server_id, folder_id required"}, status_code=400
+        )
+
+    request_write_lock()
+    db = await get_db()
+
+    err = await _validate_archive_target(db, server_id, folder_id)
+    if err:
+        return err
+
+    # Fetch source mails
+    placeholders = ",".join("?" for _ in mail_ids)
+    rows = await db.execute_fetchall(
+        "SELECT message_id, uid, subject, from_name, from_addr, to_addr, "
+        "cc_addr, reply_to, date, size, unread, attachment_count, "
+        "content_hash, body_text, raw_path, raw_size, in_reply_to, "
+        "references_header "
+        f"FROM mails WHERE id IN ({placeholders})",
+        mail_ids,
+    )
+
+    copied = 0
+    message_ids = []
+    for r in rows:
+        await db.execute(
+            "INSERT INTO mails (server_id, folder_id, uid, message_id, subject, "
+            "from_name, from_addr, to_addr, cc_addr, reply_to, date, size, "
+            "unread, attachment_count, content_hash, body_text, raw_path, "
+            "raw_size, in_reply_to, references_header, legal_hold) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            (
+                server_id, folder_id, r["uid"], r["message_id"], r["subject"],
+                r["from_name"], r["from_addr"], r["to_addr"], r["cc_addr"],
+                r["reply_to"], r["date"], r["size"], r["unread"],
+                r["attachment_count"], r["content_hash"], r["body_text"],
+                r["raw_path"], r["raw_size"], r["in_reply_to"],
+                r["references_header"],
+            ),
+        )
+        copied += 1
+        if r["message_id"]:
+            message_ids.append(r["message_id"])
+    await db.commit()
+
+    # Recalculate dup_counts in background
+    if message_ids:
+        conn = await open_connection()
+        asyncio.create_task(_bg_recalc(conn, message_ids))
+
+    return JSONResponse({"copied": copied})
+
+
+async def _bg_recalc(conn, message_ids):
+    """Background dup_count recalculation on a separate connection."""
+    try:
+        await recalculate_dup_counts(conn, message_ids)
+    except Exception:
+        logger.exception("Background dup recalc failed")
+    finally:
+        await conn.close()
