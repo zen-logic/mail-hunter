@@ -846,7 +846,6 @@ function getSearchParams() {
     if (hasDups) params.has_dups = '1';
     const searchServer = document.getElementById('search-server').value;
     if (searchServer) params.server_id = searchServer;
-    else if (selectedServerId) params.server_id = selectedServerId;
     return params;
 }
 
