@@ -431,9 +431,18 @@ async def search_mails(request: Request):
         params.append(f"%{attachment_q}%")
 
     where = " AND ".join(conditions)
-    sort_col, _sort_col_m, sort_dir, page = _sort_params(request)
 
     db = await get_db()
+
+    ids_only = request.query_params.get("ids_only", "").strip()
+    if ids_only:
+        rows = await db.execute_fetchall(
+            f"SELECT id FROM mails WHERE {where}", params
+        )
+        return JSONResponse({"ids": [r["id"] for r in rows]})
+
+    sort_col, _sort_col_m, sort_dir, page = _sort_params(request)
+
     count_row = await db.execute_fetchall(
         f"SELECT COUNT(*) as cnt FROM mails WHERE {where}", params
     )
@@ -459,8 +468,8 @@ async def search_mails(request: Request):
 async def list_mails(request: Request):
     server_id = request.path_params["server_id"]
     folder = request.query_params.get("folder")
-    sort_col, sort_col_m, sort_dir, page = _sort_params(request)
     db = await get_db()
+    ids_only = request.query_params.get("ids_only", "").strip()
 
     if folder:
         # Check if this is a virtual (label-backed) folder
@@ -471,7 +480,16 @@ async def list_mails(request: Request):
         label_tag = tag_row[0]["label_tag"] if tag_row and tag_row[0]["label_tag"] else None
 
         if label_tag:
+            if ids_only:
+                rows = await db.execute_fetchall(
+                    "SELECT m.id FROM mails m "
+                    "WHERE m.server_id = ? AND EXISTS "
+                    "(SELECT 1 FROM tags t WHERE t.mail_id = m.id AND t.tag = ?)",
+                    (server_id, label_tag),
+                )
+                return JSONResponse({"ids": [r["id"] for r in rows]})
             # Virtual folder — query by tag
+            sort_col, sort_col_m, sort_dir, page = _sort_params(request)
             count_row = await db.execute_fetchall(
                 "SELECT COUNT(*) as cnt FROM mails m "
                 "WHERE m.server_id = ? AND EXISTS "
@@ -492,6 +510,14 @@ async def list_mails(request: Request):
             # Real folder — match the folder itself plus any children (separated by / or .)
             where = "m.server_id = ? AND (f.name = ? OR f.name LIKE ? OR f.name LIKE ?)"
             params = (server_id, folder, f"{folder}/%", f"{folder}.%")
+            if ids_only:
+                rows = await db.execute_fetchall(
+                    "SELECT m.id FROM mails m JOIN folders f ON m.folder_id = f.id "
+                    f"WHERE {where}",
+                    params,
+                )
+                return JSONResponse({"ids": [r["id"] for r in rows]})
+            sort_col, sort_col_m, sort_dir, page = _sort_params(request)
             count_row = await db.execute_fetchall(
                 "SELECT COUNT(*) as cnt FROM mails m JOIN folders f ON m.folder_id = f.id "
                 f"WHERE {where}",
@@ -509,6 +535,12 @@ async def list_mails(request: Request):
     else:
         where = "server_id = ?"
         params = (server_id,)
+        if ids_only:
+            rows = await db.execute_fetchall(
+                f"SELECT id FROM mails WHERE {where}", params
+            )
+            return JSONResponse({"ids": [r["id"] for r in rows]})
+        sort_col, sort_col_m, sort_dir, page = _sort_params(request)
         count_row = await db.execute_fetchall(
             f"SELECT COUNT(*) as cnt FROM mails WHERE {where}", params
         )

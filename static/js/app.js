@@ -2125,6 +2125,31 @@ function _getVisibleMails() {
     );
 }
 
+async function _fetchAllIds() {
+    // Fetch all mail IDs for the current view (search or folder browse)
+    try {
+        let url;
+        if (customMailView) {
+            const params = getSearchParams();
+            params.ids_only = '1';
+            url = `/api/mails/search?${new URLSearchParams(params)}`;
+        } else if (selectedServerId) {
+            const params = new URLSearchParams({ ids_only: '1' });
+            if (selectedFolder) params.set('folder', selectedFolder);
+            url = `/api/servers/${selectedServerId}/mails?${params}`;
+        } else {
+            return null;
+        }
+        const resp = await fetch(url);
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        return data.ids;
+    } catch (err) {
+        console.error('Failed to fetch all IDs:', err);
+        return null;
+    }
+}
+
 function _updateHeaderCheckbox() {
     const cb = document.getElementById('header-check');
     if (!cb) return;
@@ -2224,13 +2249,17 @@ function renderMails(mails) {
     // Column resize
     initColumnResize(container.querySelector('.mail-table'));
 
-    // Header checkbox — toggle all visible
-    document.getElementById('header-check')?.addEventListener('change', (e) => {
-        const visible = _getVisibleMails();
+    // Header checkbox — toggle all in result set
+    document.getElementById('header-check')?.addEventListener('change', async (e) => {
         if (e.target.checked) {
-            visible.forEach(m => selectedMailIds.add(m.id));
+            const allIds = await _fetchAllIds();
+            if (allIds) {
+                allIds.forEach(id => selectedMailIds.add(id));
+            } else {
+                currentMails.forEach(m => selectedMailIds.add(m.id));
+            }
         } else {
-            visible.forEach(m => selectedMailIds.delete(m.id));
+            selectedMailIds.clear();
         }
         _updateRowCheckboxes();
         _updateHeaderCheckbox();
@@ -2646,9 +2675,13 @@ function renderMultiSelect() {
     // currentMails is the current page — selectedMailIds may span pages
     const knownSelected = currentMails.filter(m => selectedMailIds.has(m.id));
     const totalSize = knownSelected.reduce((sum, m) => sum + (m.size || 0), 0);
-    const unknownCount = selectedMailIds.size - knownSelected.length;
+    const remainingCount = selectedMailIds.size - knownSelected.length;
 
-    let listHtml = knownSelected.map(m => {
+    const MAX_SHOWN = 10;
+    const shown = knownSelected.slice(0, MAX_SHOWN);
+    const moreCount = selectedMailIds.size - shown.length;
+
+    let listHtml = shown.map(m => {
         const from = m.from_name || m.from_addr || '';
         const subject = m.subject || '(no subject)';
         return `<div class="multi-select-item">
@@ -2656,14 +2689,14 @@ function renderMultiSelect() {
             <div class="ms-from">${esc(from)}</div>
         </div>`;
     }).join('');
-    if (unknownCount > 0) {
-        listHtml += `<div class="multi-select-item text-muted">+ ${unknownCount} more on other pages</div>`;
+    if (moreCount > 0) {
+        listHtml += `<div class="multi-select-item text-muted">and ${moreCount} more&hellip;</div>`;
     }
 
     container.innerHTML = `
         <div class="detail-section">
             <div class="multi-select-header">${selectedMailIds.size} Messages Selected</div>
-            <div class="multi-select-size">${formatSize(totalSize)}${unknownCount > 0 ? ' (this page)' : ' total'}</div>
+            <div class="multi-select-size">${formatSize(totalSize)}${remainingCount > 0 ? ' (this page)' : ' total'}</div>
         </div>
         <div class="detail-section">
             <h3>Batch Actions</h3>
@@ -3042,13 +3075,19 @@ function handleMailKeys(e) {
     const rows = getMailRows();
     const visible = _getVisibleMails();
 
-    // Ctrl+A / Cmd+A — select all visible
+    // Ctrl+A / Cmd+A — select all in result set
     if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
         e.preventDefault();
-        visible.forEach(m => selectedMailIds.add(m.id));
-        _updateRowCheckboxes();
-        _updateHeaderCheckbox();
-        _syncDetailPanel();
+        _fetchAllIds().then(allIds => {
+            if (allIds) {
+                allIds.forEach(id => selectedMailIds.add(id));
+            } else {
+                visible.forEach(m => selectedMailIds.add(m.id));
+            }
+            _updateRowCheckboxes();
+            _updateHeaderCheckbox();
+            _syncDetailPanel();
+        });
         return;
     }
 
