@@ -1646,9 +1646,7 @@ function renderServers(servers) {
             : '<span class="server-toggle-spacer"></span>';
         const totalMsgs = (s.folders || []).reduce((sum, f) => sum + (f.count || 0), 0);
         const folderCnt = (s.folders || []).length;
-        const summary = folderCnt > 0
-            ? `<span class="server-summary">${totalMsgs.toLocaleString()} messages, ${folderCnt} folders</span>`
-            : '';
+        const summary = `<span class="server-summary">${totalMsgs.toLocaleString()} messages, ${folderCnt} folders</span>`;
         const addFolderBtn = isArchive ? `<button class="btn btn-sm archive-folder-btn" data-archive-add="${s.id}" title="New Folder">+</button>` : '';
         html += `<div class="server-item${sel}" data-id="${s.id}">
             ${chevron}
