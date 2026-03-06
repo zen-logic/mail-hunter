@@ -725,6 +725,25 @@ document.querySelector('#server-panel .panel-title').addEventListener('click', (
 });
 document.querySelector('#server-panel .panel-title').style.cursor = 'pointer';
 
+// New Archive button
+document.getElementById('btn-new-archive').addEventListener('click', async () => {
+    const name = await showPrompt('Archive name:', { title: 'New Archive', placeholder: 'My Archive' });
+    if (!name) return;
+    try {
+        const resp = await fetch('/api/archives', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        });
+        if (resp.ok) {
+            ActivityLog.add(`Archive created: ${name}`);
+            loadServers();
+        }
+    } catch (err) {
+        console.error('Create archive failed:', err);
+    }
+});
+
 serverFilter.addEventListener('input', () => renderServers(allServers));
 
 serverFilter.addEventListener('keydown', (e) => {
@@ -1030,10 +1049,11 @@ async function renderSettings() {
         `<option value="${n}"${n === currentTheme ? ' selected' : ''}>${n.replace(/\b\w/g, c => c.toUpperCase())}</option>`
     ).join('');
 
-    // Server rows
+    // Server rows (skip archive servers — managed via tree panel)
     let serverRows = '';
     if (servers.length) {
         for (const s of servers) {
+            if (s.protocol === 'archive') continue;
             serverRows += `<tr>
                 <td>${esc(s.name)}</td>
                 <td>${esc(s.host)}:${s.port}</td>
@@ -1545,18 +1565,22 @@ function renderServers(servers) {
     let html = '';
     for (const s of filtered) {
         const sel = s.id === selectedServerId ? ' selected' : '';
-        const isSyncing = syncingServerIds.has(s.id);
-        const isCancelling = cancellingServerIds.has(s.id);
-        const isQueued = queuedServerIds.has(s.id);
+        const isArchive = s.protocol === 'archive';
+        const isImport = s.protocol === 'import';
         let syncBadge = '';
-        if (isCancelling) {
-            syncBadge = '<span class="sync-badge cancelling-badge">cancelling</span>';
-        } else if (isSyncing && isQueued) {
-            syncBadge = '<span class="sync-badge">syncing</span> <span class="sync-badge queued-badge" data-dequeue="' + s.id + '">queued</span>';
-        } else if (isSyncing) {
-            syncBadge = '<span class="sync-badge">syncing</span>';
-        } else if (isQueued) {
-            syncBadge = '<span class="sync-badge queued-badge" data-dequeue="' + s.id + '">queued</span>';
+        if (!isArchive && !isImport) {
+            const isSyncing = syncingServerIds.has(s.id);
+            const isCancelling = cancellingServerIds.has(s.id);
+            const isQueued = queuedServerIds.has(s.id);
+            if (isCancelling) {
+                syncBadge = '<span class="sync-badge cancelling-badge">cancelling</span>';
+            } else if (isSyncing && isQueued) {
+                syncBadge = '<span class="sync-badge">syncing</span> <span class="sync-badge queued-badge" data-dequeue="' + s.id + '">queued</span>';
+            } else if (isSyncing) {
+                syncBadge = '<span class="sync-badge">syncing</span>';
+            } else if (isQueued) {
+                syncBadge = '<span class="sync-badge queued-badge" data-dequeue="' + s.id + '">queued</span>';
+            }
         }
         const serverKey = `srv:${s.id}`;
         const isCollapsed = collapsed.has(serverKey);
@@ -1569,10 +1593,11 @@ function renderServers(servers) {
         const summary = folderCnt > 0
             ? `<span class="server-summary">${totalMsgs.toLocaleString()} messages, ${folderCnt} folders</span>`
             : '';
+        const addFolderBtn = isArchive ? `<button class="btn btn-sm archive-folder-btn" data-archive-add="${s.id}" title="New Folder">+</button>` : '';
         html += `<div class="server-item${sel}" data-id="${s.id}">
             ${chevron}
             <span class="server-label">${esc(s.name)}${summary}</span>
-            ${syncBadge}
+            ${syncBadge}${addFolderBtn}
         </div>`;
         if (hasFolders && !isCollapsed) {
             const tree = buildFolderTree(s.folders);
@@ -1615,6 +1640,30 @@ function renderServers(servers) {
                 await fetch(`/api/servers/${sid}/sync/queue`, { method: 'DELETE' });
             } catch (err) {
                 console.error('Dequeue failed:', err);
+            }
+        });
+    });
+    container.querySelectorAll('[data-archive-add]').forEach(el => {
+        el.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const sid = parseInt(el.dataset.archiveAdd);
+            const name = await showPrompt('Folder name:', { title: 'New Folder', placeholder: 'Projects/2024' });
+            if (!name) return;
+            try {
+                const resp = await fetch(`/api/archives/${sid}/folders`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name }),
+                });
+                if (resp.ok) {
+                    ActivityLog.add(`Folder created: ${name}`);
+                    loadServers();
+                } else {
+                    const err = await resp.json();
+                    ActivityLog.add(`Create folder failed: ${err.error}`);
+                }
+            } catch (err) {
+                console.error('Create folder failed:', err);
             }
         });
     });
@@ -1674,14 +1723,19 @@ async function renderServerDetail() {
         return;
     }
 
+    const isArchive = server.protocol === 'archive';
+    const isImport = server.protocol === 'import';
+
     if (selectedFolder) {
         const leafName = selectedFolder.includes('/') ? selectedFolder.split('/').pop()
             : selectedFolder.includes('.') ? selectedFolder.split('.').pop()
             : selectedFolder;
         const folderObj = (server.folders || []).find(f => f.name === selectedFolder);
         const msgCount = folderObj ? (folderObj.count || 0) : 0;
-        const isImportOnly = !server.host;
-        const syncing = syncingServerIds.has(server.id);
+        const syncing = !isArchive && !isImport && syncingServerIds.has(server.id);
+        const deleteEndpoint = isArchive
+            ? `/api/archives/${server.id}/folders?folder=${encodeURIComponent(selectedFolder)}`
+            : `/api/servers/${server.id}/folders?folder=${encodeURIComponent(selectedFolder)}`;
         container.innerHTML = `
             <div class="detail-section">
                 <div class="detail-subject">${esc(leafName)}</div>
@@ -1693,8 +1747,8 @@ async function renderServerDetail() {
             </div>
             <div class="detail-section">
                 <div class="detail-btn-group">
-                    ${!isImportOnly && !syncing ? `<button class="btn" id="btn-sync-folder">Sync Folder</button>` : ''}
-                    ${msgCount > 0 ? `<button class="btn btn-danger" id="btn-delete-folder-msgs">Delete Messages</button>` : ''}
+                    ${!isArchive && !isImport && !syncing ? `<button class="btn" id="btn-sync-folder">Sync Folder</button>` : ''}
+                    <button class="btn btn-danger" id="btn-delete-folder-msgs">${isArchive ? 'Delete Folder' : 'Delete Messages'}</button>
                 </div>
             </div>
         `;
@@ -1714,9 +1768,12 @@ async function renderServerDetail() {
         });
 
         document.getElementById('btn-delete-folder-msgs')?.addEventListener('click', async () => {
-            if (!await showConfirm(`Delete all ${msgCount} messages in "${leafName}"?`)) return;
+            const confirmMsg = isArchive
+                ? `Delete folder "${leafName}" and its ${msgCount} messages?`
+                : `Delete all ${msgCount} messages in "${leafName}"?`;
+            if (!await showConfirm(confirmMsg)) return;
             try {
-                const resp = await fetch(`/api/servers/${server.id}/folders?folder=${encodeURIComponent(selectedFolder)}`, { method: 'DELETE' });
+                const resp = await fetch(deleteEndpoint, { method: 'DELETE' });
                 if (resp.ok) {
                     selectedFolder = null;
                     loadServers();
@@ -1736,10 +1793,63 @@ async function renderServerDetail() {
 
     const totalMails = (server.folders || []).reduce((sum, f) => sum + (f.count || 0), 0);
     const folderCount = (server.folders || []).length;
-    const isImportOnly = !server.host;
+
+    if (isArchive) {
+        // Archive server detail — no sync/test/backfill
+        container.innerHTML = `
+            <div class="detail-section">
+                <div class="detail-subject">${esc(server.name)}</div>
+            </div>
+            <div class="detail-section">
+                <h3>Archive Info</h3>
+                <div class="detail-field"><span class="label">Messages</span><span class="value">${totalMails}</span></div>
+                <div class="detail-field"><span class="label">Folders</span><span class="value">${folderCount}</span></div>
+            </div>
+            <div class="detail-section">
+                <div class="detail-btn-group">
+                    <button class="btn" id="btn-new-archive-folder">New Folder</button>
+                    <button class="btn btn-danger" id="btn-delete-server">Delete Archive</button>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('btn-new-archive-folder').addEventListener('click', async () => {
+            const name = await showPrompt('Folder name:', { title: 'New Folder', placeholder: 'Projects/2024' });
+            if (!name) return;
+            try {
+                const resp = await fetch(`/api/archives/${server.id}/folders`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name }),
+                });
+                if (resp.ok) {
+                    ActivityLog.add(`Folder created: ${name}`);
+                    loadServers();
+                    renderServerDetail();
+                } else {
+                    const err = await resp.json();
+                    ActivityLog.add(`Create folder failed: ${err.error}`);
+                }
+            } catch (err) {
+                console.error('Create folder failed:', err);
+            }
+        });
+
+        document.getElementById('btn-delete-server').addEventListener('click', async () => {
+            if (!await showConfirm(`Delete archive "${server.name}" and all its messages?`)) return;
+            allServers = allServers.filter(s => s.id !== server.id);
+            renderServers(allServers);
+            clearSelection();
+            fetch(`/api/servers/${server.id}`, { method: 'DELETE' }).catch(err => {
+                console.error('Delete failed:', err);
+            });
+        });
+
+        return;
+    }
 
     // Use WebSocket-driven state for sync status (avoids race with API during transitions)
-    const syncing = !isImportOnly && syncingServerIds.has(server.id);
+    const syncing = !isImport && syncingServerIds.has(server.id);
 
     container.innerHTML = `
         <div class="detail-section">
@@ -1758,13 +1868,13 @@ async function renderServerDetail() {
         </div>
         <div class="detail-section">
             <div class="detail-btn-group">
-                ${!isImportOnly && !syncing ? `<button class="btn" id="btn-sync-server">Sync</button>` : ''}
-                ${!isImportOnly && !syncing && server.last_sync ? `<button class="btn" id="btn-full-sync">Full Sync</button>` : ''}
-                ${!isImportOnly && !syncing && server.last_sync ? `<button class="btn" id="btn-purge-sync">Delete &amp; Re-sync</button>` : ''}
-                ${!isImportOnly && syncing ? `<button class="btn" id="btn-cancel-sync">Cancel Sync</button>` : ''}
-                ${!isImportOnly && !syncing && server.is_gmail ? `<button class="btn" id="btn-backfill-labels">Backfill Labels</button>` : ''}
-                ${!isImportOnly ? `<button class="btn" id="btn-test-connection">Test Connection</button>` : ''}
-                <button class="btn btn-danger" id="btn-delete-server">${isImportOnly ? 'Delete Import' : 'Delete Server'}</button>
+                ${!isImport && !syncing ? `<button class="btn" id="btn-sync-server">Sync</button>` : ''}
+                ${!isImport && !syncing && server.last_sync ? `<button class="btn" id="btn-full-sync">Full Sync</button>` : ''}
+                ${!isImport && !syncing && server.last_sync ? `<button class="btn" id="btn-purge-sync">Delete &amp; Re-sync</button>` : ''}
+                ${!isImport && syncing ? `<button class="btn" id="btn-cancel-sync">Cancel Sync</button>` : ''}
+                ${!isImport && !syncing && server.is_gmail ? `<button class="btn" id="btn-backfill-labels">Backfill Labels</button>` : ''}
+                ${!isImport ? `<button class="btn" id="btn-test-connection">Test Connection</button>` : ''}
+                <button class="btn btn-danger" id="btn-delete-server">${isImport ? 'Delete Import' : 'Delete Server'}</button>
             </div>
         </div>
     `;
@@ -1881,7 +1991,7 @@ async function renderServerDetail() {
 
     // Delete
     document.getElementById('btn-delete-server').addEventListener('click', async () => {
-        if (!await showConfirm(`Delete ${isImportOnly ? 'import' : 'server'} "${server.name}" and all its messages?`)) return;
+        if (!await showConfirm(`Delete ${isImport ? 'import' : 'server'} "${server.name}" and all its messages?`)) return;
         // Remove from tree immediately
         allServers = allServers.filter(s => s.id !== server.id);
         renderServers(allServers);
