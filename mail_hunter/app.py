@@ -35,6 +35,7 @@ from mail_hunter.routes.api import (
     get_server_stats,
     get_version,
     get_mail_duplicates,
+    get_mail_thread,
     list_saved_searches,
     create_saved_search,
     delete_saved_search,
@@ -195,6 +196,11 @@ routes = [
     Route(
         "/api/mails/{mail_id:int}/duplicates",
         get_mail_duplicates,
+        methods=["GET"],
+    ),
+    Route(
+        "/api/mails/{mail_id:int}/thread",
+        get_mail_thread,
         methods=["GET"],
     ),
     Route("/api/mails/{mail_id:int}/hold", toggle_hold, methods=["PUT"]),

@@ -928,6 +928,79 @@ async def delete_saved_search(request: Request):
     return JSONResponse({"ok": True})
 
 
+async def get_mail_thread(request: Request):
+    """Return all mails in the same conversation thread."""
+    mail_id = request.path_params["mail_id"]
+    db = await get_db()
+
+    row = await db.execute_fetchall(
+        "SELECT message_id, in_reply_to, references_header FROM mails WHERE id = ?",
+        (mail_id,),
+    )
+    if not row:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    def _strip_angles(s):
+        s = s.strip()
+        if s.startswith("<") and s.endswith(">"):
+            return s[1:-1]
+        return s
+
+    def _parse_message_ids(text):
+        if not text:
+            return set()
+        ids = set()
+        for part in text.split():
+            cleaned = _strip_angles(part)
+            if cleaned:
+                ids.add(cleaned)
+        return ids
+
+    # Build initial set of related message-ids
+    related = set()
+    msg_id = row[0]["message_id"]
+    if msg_id:
+        related.add(_strip_angles(msg_id))
+    related |= _parse_message_ids(row[0]["in_reply_to"])
+    related |= _parse_message_ids(row[0]["references_header"])
+
+    if not related:
+        return JSONResponse({"items": []})
+
+    # Iterative expansion — max 3 rounds
+    for _ in range(3):
+        placeholders = ",".join("?" for _ in related)
+        expand_rows = await db.execute_fetchall(
+            "SELECT message_id, in_reply_to, references_header FROM mails "
+            f"WHERE message_id IN ({placeholders})",
+            list(related),
+        )
+        new_ids = set()
+        for r in expand_rows:
+            if r["message_id"]:
+                new_ids.add(_strip_angles(r["message_id"]))
+            new_ids |= _parse_message_ids(r["in_reply_to"])
+            new_ids |= _parse_message_ids(r["references_header"])
+        if new_ids <= related:
+            break
+        related |= new_ids
+
+    placeholders = ",".join("?" for _ in related)
+    rows = await db.execute_fetchall(
+        "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, "
+        "m.size, m.unread, m.attachment_count, m.legal_hold, m.dup_count, "
+        "s.name AS server_name, f.name AS folder_name "
+        "FROM mails m "
+        "LEFT JOIN servers s ON m.server_id = s.id "
+        "LEFT JOIN folders f ON m.folder_id = f.id "
+        f"WHERE m.message_id IN ({placeholders}) "
+        "ORDER BY m.date ASC",
+        list(related),
+    )
+
+    return JSONResponse({"items": [dict(r) for r in rows]})
+
+
 async def get_mail_duplicates(request: Request):
     """Return other mails with the same message_id or content_hash."""
     mail_id = request.path_params["mail_id"]

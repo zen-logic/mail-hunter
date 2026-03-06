@@ -2214,6 +2214,7 @@ function renderDetail(mail) {
                 ${mail.raw_path ? `<button class="btn" id="btn-download-eml">Download EML</button>` : ''}
                 ${mail.raw_path ? `<button class="btn" id="btn-export-zip">Export</button>` : ''}
                 ${mail.dup_count > 0 ? `<button class="btn" id="btn-show-dups">Show Duplicates</button>` : ''}
+                ${mail.in_reply_to || mail.references_header ? `<button class="btn" id="btn-show-thread">Show Thread</button>` : ''}
                 <button class="btn" id="btn-toggle-hold">${mail.legal_hold ? 'Release Hold' : 'Legal Hold'}</button>
                 <button class="btn btn-danger" id="btn-delete-mail"${mail.legal_hold ? ' disabled title="Message is on legal hold"' : ''}>Delete Message</button>
             </div>
@@ -2248,6 +2249,23 @@ function renderDetail(mail) {
             applyFilterAndRender();
         } catch (err) {
             console.error('Failed to load duplicates:', err);
+        }
+    });
+
+    // Show thread
+    document.getElementById('btn-show-thread')?.addEventListener('click', async () => {
+        try {
+            const resp = await fetch(`/api/mails/${mail.id}/thread`);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            currentMails = data.items;
+            totalMails = data.items.length;
+            currentPage = 0;
+            document.getElementById('mail-panel-title').textContent = `Thread: ${mail.subject || '(no subject)'}`;
+            document.getElementById('mail-count').textContent = data.items.length ? `(${data.items.length})` : '';
+            applyFilterAndRender();
+        } catch (err) {
+            console.error('Failed to load thread:', err);
         }
     });
 
