@@ -370,7 +370,9 @@ async def search_mails(request: Request):
     tag_q = request.query_params.get("tag", "").strip()
     held_q = request.query_params.get("held", "").strip()
 
-    if not any([from_q, to_q, subject_q, body_q, date_from, date_to, tag_q, held_q]):
+    has_dups = request.query_params.get("has_dups", "").strip()
+
+    if not any([from_q, to_q, subject_q, body_q, date_from, date_to, tag_q, held_q, has_dups]):
         return JSONResponse({"items": [], "total": 0, "page": 0, "pageSize": PAGE_SIZE})
 
     conditions = []
@@ -415,6 +417,9 @@ async def search_mails(request: Request):
     if held_q:
         conditions.append("legal_hold = 1")
 
+    if has_dups:
+        conditions.append("dup_count > 0")
+
     where = " AND ".join(conditions)
     sort_col, _sort_col_m, sort_dir, page = _sort_params(request)
 
@@ -425,7 +430,7 @@ async def search_mails(request: Request):
     total = count_row[0]["cnt"] if count_row else 0
 
     rows = await db.execute_fetchall(
-        "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count, legal_hold "
+        "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count, legal_hold, dup_count "
         f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
         f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
         params,
@@ -466,7 +471,7 @@ async def list_mails(request: Request):
             total = count_row[0]["cnt"] if count_row else 0
             rows = await db.execute_fetchall(
                 "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, "
-                "m.size, m.unread, m.attachment_count, m.legal_hold "
+                "m.size, m.unread, m.attachment_count, m.legal_hold, m.dup_count "
                 "FROM mails m WHERE m.server_id = ? AND EXISTS "
                 "(SELECT 1 FROM tags t WHERE t.mail_id = m.id AND t.tag = ?) "
                 f"ORDER BY {sort_col_m} {sort_dir} "
@@ -485,7 +490,7 @@ async def list_mails(request: Request):
             total = count_row[0]["cnt"] if count_row else 0
             rows = await db.execute_fetchall(
                 "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, m.size, "
-                "m.unread, m.attachment_count, m.legal_hold "
+                "m.unread, m.attachment_count, m.legal_hold, m.dup_count "
                 "FROM mails m JOIN folders f ON m.folder_id = f.id "
                 f"WHERE {where} ORDER BY {sort_col_m} {sort_dir} "
                 f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
@@ -499,7 +504,7 @@ async def list_mails(request: Request):
         )
         total = count_row[0]["cnt"] if count_row else 0
         rows = await db.execute_fetchall(
-            "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count, legal_hold "
+            "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count, legal_hold, dup_count "
             f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
             f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
             params,

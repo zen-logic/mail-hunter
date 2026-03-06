@@ -673,7 +673,7 @@ serverFilter.addEventListener('keydown', (e) => {
 
 const searchPanel = document.getElementById('search-panel');
 const searchToggleBtn = document.getElementById('btn-search');
-const searchFields = ['search-from', 'search-to', 'search-subject', 'search-body', 'search-date-from', 'search-date-to', 'search-tag', 'search-held', 'search-server'];
+const searchFields = ['search-from', 'search-to', 'search-subject', 'search-body', 'search-date-from', 'search-date-to', 'search-tag', 'search-held', 'search-has-dups', 'search-server'];
 
 searchToggleBtn.addEventListener('click', () => {
     const visible = !searchPanel.classList.contains('hidden');
@@ -700,6 +700,8 @@ function getSearchParams() {
     if (tag) params.tag = tag;
     const held = document.getElementById('search-held').checked;
     if (held) params.held = '1';
+    const hasDups = document.getElementById('search-has-dups').checked;
+    if (hasDups) params.has_dups = '1';
     const searchServer = document.getElementById('search-server').value;
     if (searchServer) params.server_id = searchServer;
     else if (selectedServerId) params.server_id = selectedServerId;
@@ -708,7 +710,7 @@ function getSearchParams() {
 
 function hasSearchParams() {
     const p = getSearchParams();
-    return p.from || p.to || p.subject || p.body || p.date_from || p.date_to || p.tag || p.held;
+    return p.from || p.to || p.subject || p.body || p.date_from || p.date_to || p.tag || p.held || p.has_dups;
 }
 
 document.getElementById('search-go').addEventListener('click', () => {
@@ -1880,11 +1882,12 @@ function renderMails(mails) {
         const toDisplay = m.to_addr || '';
         const subjectDisplay = m.subject || '(no subject)';
         const holdIcon = m.legal_hold ? '<span class="hold-indicator" title="Legal hold">&#128274;</span>' : '';
+        const dupIcon = m.dup_count ? `<span class="dup-indicator" title="${m.dup_count} duplicate${m.dup_count > 1 ? 's' : ''}">&#x2733;</span>` : '';
         html += `<tr class="${sel}${unread}${held}" data-id="${m.id}">
             <td class="col-check"><input type="checkbox" class="row-check"${checked}></td>
             <td class="col-from" title="${esc(fromDisplay)}">${esc(fromDisplay)}</td>
             <td class="col-to" title="${esc(toDisplay)}">${esc(toDisplay)}</td>
-            <td class="col-subject" title="${esc(subjectDisplay)}">${holdIcon}${esc(subjectDisplay)}</td>
+            <td class="col-subject" title="${esc(subjectDisplay)}">${dupIcon}${holdIcon}${esc(subjectDisplay)}</td>
             <td class="col-date">${formatDate(m.date)}</td>
             <td class="col-size">${formatSize(m.size)}</td>
             <td class="col-attachments">${m.attachment_count || ''}</td>
@@ -2045,7 +2048,7 @@ function renderDetail(mail) {
 
     container.innerHTML = `
         <div class="detail-section">
-            <div class="detail-subject">${esc(mail.subject || '(no subject)')}${mail.legal_hold ? ' <span class="hold-badge">LEGAL HOLD</span>' : ''}</div>
+            <div class="detail-subject">${esc(mail.subject || '(no subject)')}${mail.legal_hold ? ' <span class="hold-badge">LEGAL HOLD</span>' : ''}${mail.dup_count ? ` <span class="dup-badge">${mail.dup_count} duplicate${mail.dup_count > 1 ? 's' : ''}</span>` : ''}</div>
             <div class="detail-location">${(() => {
                 const crumbs = [];
                 if (mail.server_name) {
