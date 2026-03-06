@@ -401,7 +401,7 @@ function handleWSMessage(msg) {
             cancellingServerIds.delete(msg.server_id);
             if (fullSyncServerId === msg.server_id) fullSyncServerId = null;
             if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
-            loadStats();
+            loadStats().then(() => { if (!selectedServerId) renderGlobalStats(); });
             loadServers().then(() => {
                 if (msg.server_id === selectedServerId) {
                     loadMails();
@@ -419,6 +419,8 @@ function handleWSMessage(msg) {
             if (msg.server_id === selectedServerId) {
                 loadMails();
                 renderServerDetail();
+            } else if (!selectedServerId) {
+                renderGlobalStats();
             }
             break;
         case 'sync_error':
@@ -428,6 +430,7 @@ function handleWSMessage(msg) {
             if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
             renderServers(allServers);
             if (msg.server_id === selectedServerId) renderServerDetail();
+            else if (!selectedServerId) renderGlobalStats();
             break;
         case 'backfill_started':
             ActivityLog.add(`Label backfill started: ${msg.server_name || 'server'}`);
