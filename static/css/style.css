@@ -39,6 +39,27 @@
     --color-tag-bg: #1a2a3a;
     --color-tag-text: #60c0d0;
 
+    /* Badges */
+    --color-scan-bg: rgba(232, 200, 64, 0.15);
+    --color-scan-text: var(--color-status-warn);
+    --color-dup-bg: rgba(232, 200, 64, 0.15);
+    --color-dup-text: var(--color-status-warn);
+    --color-border-card: var(--color-border);
+
+    /* Effects (none by default — themes add them) */
+    --text-glow: none;
+    --scanline-opacity: 0;
+    --title-letter-spacing: normal;
+    --title-text-transform: none;
+    --title-glow: none;
+    --glow-primary: none;
+    --glow-primary-hover: none;
+    --glow-focus: none;
+    --glow-modal: none;
+    --glow-stat: none;
+    --glow-status-dot: none;
+    --glow-dup: none;
+
     /* Typography */
     --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     --font-size-base: 0.8125rem;
@@ -57,8 +78,26 @@ body {
     font-size: var(--font-size-base);
     background: var(--color-bg);
     color: var(--color-text);
+    text-shadow: var(--text-glow);
     height: 100vh;
     overflow: hidden;
+}
+
+/* ── Scanline overlay ──────────────────────────────── */
+body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 0, 0, 0.3) 2px,
+        rgba(0, 0, 0, 0.3) 4px
+    );
+    opacity: var(--scanline-opacity);
 }
 
 /* ── Layout ─────────────────────────────────────────── */
@@ -84,6 +123,9 @@ body {
     font-weight: var(--font-weight-semibold);
     white-space: nowrap;
     cursor: pointer;
+    text-transform: var(--title-text-transform);
+    letter-spacing: var(--title-letter-spacing);
+    text-shadow: var(--title-glow);
 }
 
 .toolbar-actions {
@@ -179,6 +221,7 @@ body {
 .panel-filter:focus {
     outline: none;
     border-color: var(--color-primary);
+    box-shadow: var(--glow-focus);
 }
 
 .panel-content {
@@ -345,11 +388,13 @@ body {
     background: var(--btn-primary-bg, var(--color-primary));
     border-color: var(--color-primary);
     color: var(--btn-primary-text, #fff);
+    box-shadow: var(--glow-primary);
 }
 
 .btn-primary:hover {
     background: var(--btn-primary-bg-hover, var(--color-primary-hover));
     border-color: var(--color-primary-hover);
+    box-shadow: var(--glow-primary-hover);
 }
 
 .btn-danger {
@@ -359,9 +404,8 @@ body {
 }
 
 .btn-danger:hover {
-    background: var(--color-status-error);
-    border-color: var(--color-status-error);
-    filter: brightness(1.2);
+    background: var(--color-danger-hover, var(--color-status-error));
+    border-color: var(--color-danger-hover, var(--color-status-error));
 }
 
 .btn-sm {
@@ -457,24 +501,24 @@ body {
     font-size: var(--font-size-xs);
     padding: 0.1rem 0.35rem;
     border-radius: 3px;
-    background: var(--color-status-warn);
-    color: #000;
+    background: var(--color-scan-bg);
+    color: var(--color-scan-text);
     white-space: nowrap;
 }
 
 .cancelling-badge {
     background: var(--color-status-error);
-    color: #fff;
+    color: var(--color-text-bright);
 }
 
 .queued-badge {
-    background: var(--color-primary);
-    color: #fff;
+    background: var(--color-surface-active);
+    color: var(--color-text-muted);
     cursor: pointer;
 }
 
 .queued-badge:hover {
-    filter: brightness(1.2);
+    opacity: 0.7;
 }
 
 .server-badge {
@@ -485,12 +529,12 @@ body {
 }
 
 .server-badge.connected {
-    background: #1a2a1a;
+    background: var(--color-surface-active);
     color: var(--color-status-ok);
 }
 
 .server-badge.error {
-    background: #3a2020;
+    background: var(--color-surface-active);
     color: var(--color-status-error);
 }
 
@@ -629,7 +673,7 @@ body {
     font-weight: var(--font-weight-semibold);
     padding: 0.1rem 0.4rem;
     border-radius: 3px;
-    background: rgba(255, 107, 107, 0.15);
+    background: var(--color-surface-active);
     color: var(--color-status-error);
     letter-spacing: 0.03em;
     vertical-align: middle;
@@ -648,11 +692,12 @@ body {
     font-weight: var(--font-weight-semibold);
     padding: 0.1rem 0.4rem;
     border-radius: 3px;
-    background: rgba(232, 200, 64, 0.15);
-    color: var(--color-status-warn);
+    background: var(--color-dup-bg);
+    color: var(--color-dup-text);
     letter-spacing: 0.03em;
     vertical-align: middle;
     margin-left: 0.4rem;
+    text-shadow: var(--glow-dup);
 }
 
 .mail-table .col-size {
@@ -920,6 +965,7 @@ body {
     max-width: 90vw;
     display: flex;
     flex-direction: column;
+    box-shadow: var(--glow-modal);
     gap: 0.75rem;
 }
 
@@ -927,6 +973,9 @@ body {
     font-size: var(--font-size-lg);
     font-weight: var(--font-weight-semibold);
     color: var(--color-text-bright);
+    text-transform: var(--title-text-transform);
+    letter-spacing: var(--title-letter-spacing);
+    text-shadow: var(--title-glow);
 }
 
 .modal-field {
@@ -953,6 +1002,7 @@ body {
 .modal-input:focus {
     outline: none;
     border-color: var(--color-primary);
+    box-shadow: var(--glow-focus);
 }
 
 .modal-actions {
@@ -1002,6 +1052,7 @@ body {
 .search-select:focus {
     outline: none;
     border-color: var(--color-primary);
+    box-shadow: var(--glow-focus);
 }
 
 .search-input::placeholder {
@@ -1454,6 +1505,7 @@ body {
 
 .status-dot.connected {
     background: var(--color-status-ok);
+    box-shadow: var(--glow-status-dot);
 }
 
 /* ── Drop overlay ──────────────────────────────────── */
@@ -1532,10 +1584,11 @@ body {
 }
 
 .stat-card {
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-card);
     border-radius: 4px;
     padding: 0.6rem 0.75rem;
     text-align: center;
+    box-shadow: var(--glow-stat);
 }
 
 .stat-card .stat-value {
@@ -1643,6 +1696,9 @@ body {
     font-size: var(--font-size-lg);
     font-weight: var(--font-weight-semibold);
     color: var(--color-text-bright);
+    text-transform: var(--title-text-transform);
+    letter-spacing: var(--title-letter-spacing);
+    text-shadow: var(--title-glow);
 }
 
 .login-subtitle {
