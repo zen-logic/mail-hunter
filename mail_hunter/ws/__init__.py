@@ -39,6 +39,9 @@ async def broadcast(msg: dict):
             _sync_state.pop(server_id, None)
         else:
             _sync_state[server_id] = msg
+            if msg_type == "sync_started":
+                # Clean up queued state — the server is now syncing
+                _sync_state.pop(f"q-{server_id}", None)
     if server_id is not None and msg_type in ("sync_queued", "sync_dequeued"):
         if msg_type == "sync_dequeued":
             _sync_state.pop(f"q-{server_id}", None)

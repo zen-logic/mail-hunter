@@ -1190,19 +1190,10 @@ async function loadServers() {
         const resp = await fetch('/api/servers');
         if (!resp.ok) return;
         allServers = await resp.json();
-        // Hydrate sync status from server response (catches auto-syncs in progress)
-        for (const s of allServers) {
-            if (s.syncing) syncingServerIds.add(s.id);
-            else syncingServerIds.delete(s.id);
-        }
+        // Sync state comes exclusively from WebSocket replay (_sync_state).
+        // No API hydration — avoids dual-source-of-truth stale badges.
         renderServers(allServers);
         updateSearchServerOptions();
-        // If any server is syncing, show status bar
-        if (syncingServerIds.size > 0 && !_statusBarSyncId) {
-            const sid = [...syncingServerIds][0];
-            const srv = allServers.find(x => x.id === sid);
-            renderSyncStatus(`Syncing ${srv ? srv.name : 'server'}...`, sid);
-        }
     } catch (err) {
         console.error('Failed to load servers:', err);
     }
@@ -1376,9 +1367,14 @@ function renderServers(servers) {
         const chevron = hasFolders
             ? `<span class="server-toggle" data-toggle-key="${serverKey}">${isCollapsed ? '&#x25B8;' : '&#x25BE;'}</span>`
             : '<span class="server-toggle-spacer"></span>';
+        const totalMsgs = (s.folders || []).reduce((sum, f) => sum + (f.count || 0), 0);
+        const folderCnt = (s.folders || []).length;
+        const summary = folderCnt > 0
+            ? `<span class="server-summary">${totalMsgs.toLocaleString()} messages, ${folderCnt} folders</span>`
+            : '';
         html += `<div class="server-item${sel}" data-id="${s.id}">
             ${chevron}
-            <span class="server-label">${esc(s.name)}</span>
+            <span class="server-label">${esc(s.name)}${summary}</span>
             ${syncBadge}
         </div>`;
         if (hasFolders && !isCollapsed) {
@@ -1544,17 +1540,8 @@ async function renderServerDetail() {
     const folderCount = (server.folders || []).length;
     const isImportOnly = !server.host;
 
-    // Check sync status for non-import servers
-    let syncing = false;
-    if (!isImportOnly) {
-        try {
-            const resp = await fetch(`/api/servers/${server.id}/sync`);
-            if (resp.ok) {
-                const status = await resp.json();
-                syncing = status.syncing;
-            }
-        } catch (err) { /* ignore */ }
-    }
+    // Use WebSocket-driven state for sync status (avoids race with API during transitions)
+    const syncing = !isImportOnly && syncingServerIds.has(server.id);
 
     container.innerHTML = `
         <div class="detail-section">

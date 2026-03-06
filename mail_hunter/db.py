@@ -125,6 +125,12 @@ MIGRATIONS = [
         "sync_interval",
         "ALTER TABLE servers ADD COLUMN sync_interval INTEGER NOT NULL DEFAULT 15",
     ),
+    # sync_queue columns
+    (
+        "sync_queue",
+        "priority",
+        "ALTER TABLE sync_queue ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+    ),
     # attachments columns
     (
         "attachments",
@@ -154,6 +160,7 @@ CREATE TABLE IF NOT EXISTS sync_queue (
     folder TEXT,
     full INTEGER NOT NULL DEFAULT 0,
     purge INTEGER NOT NULL DEFAULT 0,
+    priority INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(server_id)
 )

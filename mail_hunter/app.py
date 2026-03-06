@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from starlette.applications import Starlette
@@ -44,8 +43,7 @@ from mail_hunter.routes.sync import (
     backfill_labels_endpoint,
     stop_backfill,
 )
-from mail_hunter.db import request_write_lock
-from mail_hunter.services.imap import sync_server, claim_sync, _start_queued_sync
+from mail_hunter.services.imap import enqueue, start_next, _queue, _sync_diag
 from mail_hunter.services.auto_sync import start_auto_sync, stop_auto_sync
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -82,12 +80,14 @@ async def on_startup():
     # Migrate any plaintext passwords to encrypted form
     await _migrate_plaintext_passwords(db)
 
-    # Resume any syncs that were in progress when the server last stopped
+    # Servers marked syncing=1 were interrupted — queue them for resume
     rows = await db.execute_fetchall(
-        "SELECT id, name, host, port, username, password, use_ssl, protocol "
-        "FROM servers WHERE syncing = 1"
+        "SELECT id, name, protocol FROM servers WHERE syncing = 1"
     )
-    first_started = False
+    _sync_diag.info(
+        "=== SERVER STARTUP — servers with syncing=1: %s ===",
+        [dict(r)["id"] for r in rows],
+    )
     for r in rows:
         server = dict(r)
         if server["protocol"] == "import":
@@ -96,61 +96,45 @@ async def on_startup():
             )
             await db.commit()
             continue
-        if not first_started:
-            # Start the first one, queue the rest
-            server["password"] = decrypt_password(server["password"])
-            logger.info(
-                "Resuming sync for server %s (id=%d)", server["name"], server["id"]
-            )
-            claim_sync(server["id"])
-            asyncio.create_task(sync_server(server["id"], server))
-            first_started = True
-        else:
-            # Queue remaining servers — they'll chain-start on completion
-            logger.info(
-                "Queuing sync for server %s (id=%d) on startup",
-                server["name"],
-                server["id"],
-            )
-            await db.execute(
-                "UPDATE servers SET syncing = 0 WHERE id = ?", (server["id"],)
-            )
-            request_write_lock()
-            await db.execute(
-                "INSERT INTO sync_queue (server_id) VALUES (?) "
-                "ON CONFLICT(server_id) DO NOTHING",
-                (server["id"],),
-            )
-            await db.commit()
+        _sync_diag.info("startup queuing server=%d (%s)", server["id"], server["name"])
+        await db.execute("UPDATE servers SET syncing = 0 WHERE id = ?", (server["id"],))
+        enqueue({
+            "server_id": server["id"],
+            "server_name": server["name"],
+            "folder": None,
+            "full": 0,
+            "purge": 0,
+            "priority": 0,
+        })
+    await db.commit()
 
-    # If nothing was resumed, start the oldest queued sync
-    if not first_started:
-        q_rows = await db.execute_fetchall(
-            "SELECT server_id, folder, full, purge FROM sync_queue "
-            "ORDER BY created_at ASC LIMIT 1"
-        )
-        if q_rows:
-            queue_row = dict(q_rows[0])
-            sid = queue_row["server_id"]
-            await db.execute("DELETE FROM sync_queue WHERE server_id = ?", (sid,))
-            await db.commit()
-            logger.info("Starting queued sync for server %d on startup", sid)
-            await _start_queued_sync(sid, queue_row)
-
-    # Populate WS state for any remaining queued syncs so badges replay
-    remaining = await db.execute_fetchall(
-        "SELECT sq.server_id, s.name FROM sync_queue sq "
-        "JOIN servers s ON s.id = sq.server_id"
+    # Also load any entries already in sync_queue (from previous _persist_queue)
+    q_rows = await db.execute_fetchall(
+        "SELECT sq.server_id, s.name, sq.folder, sq.full, sq.purge, sq.priority "
+        "FROM sync_queue sq JOIN servers s ON s.id = sq.server_id "
+        "ORDER BY sq.priority ASC, sq.created_at ASC"
     )
-    for rq in remaining:
+    for qr in q_rows:
+        enqueue({
+            "server_id": qr["server_id"],
+            "server_name": qr["name"],
+            "folder": qr["folder"],
+            "full": qr["full"],
+            "purge": qr["purge"],
+            "priority": qr["priority"],
+        })
+
+    # Broadcast queue state for WS replay
+    for entry in _queue:
         await broadcast(
             {
                 "type": "sync_queued",
-                "server_id": rq["server_id"],
-                "server_name": rq["name"],
+                "server_id": entry["server_id"],
+                "server_name": entry["server_name"],
             }
         )
 
+    await start_next()
     start_auto_sync()
 
 

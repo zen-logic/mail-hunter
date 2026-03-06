@@ -3,6 +3,7 @@ import imaplib
 import logging
 import ssl
 from datetime import datetime, timezone
+from pathlib import Path
 
 from mail_hunter.db import open_connection, check_write_lock_requested
 from mail_hunter.config import decrypt_password
@@ -18,6 +19,17 @@ from mail_hunter.services.dedup import recalculate_dup_counts
 from mail_hunter.ws import broadcast
 
 logger = logging.getLogger(__name__)
+
+# --- File-based sync diagnostic logger ---
+_sync_log_path = Path(__file__).resolve().parent.parent.parent / "sync_diag.log"
+_sync_diag = logging.getLogger("sync_diag")
+_sync_diag.setLevel(logging.DEBUG)
+_sync_diag.propagate = False
+_diag_handler = logging.FileHandler(_sync_log_path, mode="a")
+_diag_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S")
+)
+_sync_diag.addHandler(_diag_handler)
 
 BATCH_SIZE = 100
 MAX_RECONNECTS = 3
@@ -133,10 +145,132 @@ async def _save_sync_state(db, server_id, folder_name, uid_validity, last_uid):
     await db.commit()
 
 
-# Active sync tasks: server_id -> True (used for cancellation)
+# --- In-memory sync coordination ---
+# All slot/queue state is mutated only by synchronous functions.
+# No await between reading state and writing state = no race.
+_slot: int | None = None          # server_id currently syncing, or None
+_queue: list[dict] = []           # in-memory ordered queue
 _cancel_requested: set[int] = set()
-_active_syncs: set[int] = set()
-_auto_sync_active: int | None = None  # server_id if auto-sync is the current owner
+_is_auto: bool = False            # True if the current _slot holder is auto-sync
+_seq_counter: int = 0
+
+
+def _next_seq() -> int:
+    global _seq_counter
+    _seq_counter += 1
+    return _seq_counter
+
+
+def enqueue(entry: dict) -> bool:
+    """Add to queue. Sorts by (priority, seq). Updates existing entry if present."""
+    for existing in _queue:
+        if existing["server_id"] == entry["server_id"]:
+            entry["seq"] = existing["seq"]  # keep original position
+            _queue[:] = [
+                e if e["server_id"] != entry["server_id"] else entry for e in _queue
+            ]
+            _queue.sort(key=lambda e: (e["priority"], e["seq"]))
+            return True
+    entry["seq"] = _next_seq()
+    _queue.append(entry)
+    _queue.sort(key=lambda e: (e["priority"], e["seq"]))
+    return True
+
+
+def dequeue(server_id: int) -> bool:
+    """Remove from queue. Returns True if found."""
+    before = len(_queue)
+    _queue[:] = [e for e in _queue if e["server_id"] != server_id]
+    return len(_queue) < before
+
+
+def _claim_next() -> dict | None:
+    """Pop front of queue and claim slot. SYNC — no await."""
+    global _slot, _is_auto
+    if _slot is not None or not _queue:
+        return None
+    entry = _queue.pop(0)
+    _slot = entry["server_id"]
+    _is_auto = entry["priority"] >= 10
+    return entry
+
+
+def release() -> None:
+    """Release the slot. SYNC — no await."""
+    global _slot, _is_auto
+    _slot = None
+    _is_auto = False
+
+
+def cancel_sync(server_id: int):
+    """Request cancellation of an active sync."""
+    _sync_diag.info("cancel_sync(%d) — slot=%s", server_id, _slot)
+    _cancel_requested.add(server_id)
+
+
+def is_syncing(server_id: int) -> bool:
+    return _slot == server_id
+
+
+def is_auto_sync_active() -> bool:
+    return _is_auto
+
+
+def get_auto_sync_server_id() -> int | None:
+    return _slot if _is_auto else None
+
+
+async def start_next():
+    """Try to start the next queued sync. Called after release() and after enqueue()."""
+    while True:
+        entry = _claim_next()  # synchronous — atomic
+        if entry is None:
+            return
+        _sync_diag.info(
+            "start_next: starting server=%d priority=%d",
+            entry["server_id"], entry["priority"],
+        )
+        try:
+            await _start_queued_sync(entry["server_id"], entry)
+            return  # sync task created successfully
+        except Exception:
+            logger.exception(
+                "Failed to start queued sync for server %d", entry["server_id"]
+            )
+            release()
+            # loop to try the next queued entry
+
+
+async def _persist_queue():
+    """Write in-memory queue to DB. For crash recovery only — not read at runtime.
+
+    Signals the running sync to yield the write lock so we can get through.
+    The DELETE + INSERTs are in one transaction — if anything fails, the DB
+    is unchanged.
+    """
+    from mail_hunter.db import request_write_lock
+
+    request_write_lock()
+    db = await open_connection()
+    try:
+        await db.execute("DELETE FROM sync_queue")
+        for entry in _queue:
+            await db.execute(
+                "INSERT INTO sync_queue (server_id, folder, full, purge, priority) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    entry["server_id"],
+                    entry.get("folder"),
+                    entry.get("full", 0),
+                    entry.get("purge", 0),
+                    entry["priority"],
+                ),
+            )
+        await db.commit()
+    except Exception:
+        logger.warning("_persist_queue: failed to persist queue to DB", exc_info=True)
+    finally:
+        await db.close()
 
 
 def _connect(host: str, port: int, username: str, password: str, use_ssl: bool = True):
@@ -235,7 +369,9 @@ def _fetch_uids_since(conn, folder: str, last_uid: int) -> tuple[int | None, lis
 def _fetch_message(conn, uid: int) -> tuple[bytes | None, list[str]]:
     """Fetch raw RFC822 message by UID. Returns (raw_bytes, gmail_labels). Blocking."""
     fetch_items = (
-        "(RFC822 X-GM-LABELS)" if getattr(conn, "_is_gmail", False) else "(RFC822)"
+        "(RFC822 X-GM-LABELS)"
+        if getattr(conn, "_is_gmail", False)
+        else "(BODY.PEEK[])"
     )
     status, data = conn.uid("FETCH", str(uid), fetch_items)
     if status != "OK" or not data or data[0] is None:
@@ -270,9 +406,8 @@ async def sync_server(
 ):
     """Full incremental sync for a server. Runs as background task.
 
-    Caller must claim the sync slot via claim_sync() before create_task().
+    Caller must have claimed the slot via _claim_next() before create_task().
     """
-    _active_syncs.add(server_id)  # ensure registered (idempotent)
     _cancel_requested.discard(server_id)
 
     db = await open_connection()
@@ -334,7 +469,7 @@ async def sync_server(
             for f in folders:
                 for prefix in ("[Gmail]/", "[Google Mail]/"):
                     if f.startswith(prefix):
-                        suffix = f[len(prefix):]
+                        suffix = f[len(prefix) :]
                         tag = _GMAIL_FOLDER_TO_TAG.get(suffix)
                         if tag:
                             await _ensure_folder(db, server_id, f, label_tag=tag)
@@ -368,14 +503,6 @@ async def sync_server(
                 continue
 
             if server_id in _cancel_requested:
-                _active_syncs.discard(server_id)
-                await broadcast(
-                    {
-                        "type": "sync_cancelled",
-                        "server_id": server_id,
-                        "imported": imported,
-                    }
-                )
                 break
 
             await broadcast(
@@ -467,6 +594,15 @@ async def sync_server(
                     if server_id in _cancel_requested:
                         break
 
+                    # Yield BEFORE the IMAP fetch so the UI write lock
+                    # isn't stuck behind a slow network operation
+                    if check_write_lock_requested():
+                        await db.commit()
+                        await _save_sync_state(
+                            db, server_id, folder_name, uid_validity, max_uid
+                        )
+                        await asyncio.sleep(0.2)
+
                     logger.info(
                         "Sync %s/%s [%d/%d]: fetching UID %d",
                         server["name"],
@@ -526,13 +662,7 @@ async def sync_server(
                     if uid > max_uid:
                         max_uid = uid
 
-                    if check_write_lock_requested():
-                        await db.commit()
-                        await _save_sync_state(
-                            db, server_id, folder_name, uid_validity, max_uid
-                        )
-                        await asyncio.sleep(0.2)
-                    elif (imported + skipped) % BATCH_SIZE == 0:
+                    if (imported + skipped) % BATCH_SIZE == 0:
                         await db.commit()
                         await _save_sync_state(
                             db, server_id, folder_name, uid_validity, max_uid
@@ -610,6 +740,14 @@ async def sync_server(
                     "errors": errors,
                 }
             )
+        else:
+            await broadcast(
+                {
+                    "type": "sync_cancelled",
+                    "server_id": server_id,
+                    "imported": imported,
+                }
+            )
 
         # Success or user cancel — clear the flag
         sync_cleared = True
@@ -646,43 +784,13 @@ async def sync_server(
                 pass
         await db.close()
         _cancel_requested.discard(server_id)
-        clear_auto_sync_flag_if(server_id)
-
-        # Check for next queued sync BEFORE releasing the slot —
-        # otherwise a request arriving during the await gap sees
-        # _active_syncs empty and bypasses the queue.
-        next_started = False
-        if sync_cleared:
-            try:
-                q_db = await open_connection()
-                try:
-                    q_rows = await q_db.execute_fetchall(
-                        "SELECT server_id, folder, full, purge FROM sync_queue "
-                        "ORDER BY created_at ASC LIMIT 1",
-                    )
-                    if q_rows:
-                        queue_row = dict(q_rows[0])
-                        next_sid = queue_row["server_id"]
-                        _active_syncs.add(next_sid)
-                        next_started = True
-                        await q_db.execute(
-                            "DELETE FROM sync_queue WHERE server_id = ?",
-                            (next_sid,),
-                        )
-                        await q_db.commit()
-                finally:
-                    await q_db.close()
-                if q_rows:
-                    await broadcast({"type": "sync_dequeued", "server_id": next_sid})
-                    await _start_queued_sync(next_sid, queue_row)
-            except Exception:
-                logger.exception("Failed to start queued sync from queue")
-                if next_started:
-                    _active_syncs.discard(next_sid)
-
-        # Now safe to release the finished server's slot
-        _active_syncs.discard(server_id)
-        logger.info("Sync slot released for server %d — active: %s", server_id, _active_syncs)
+        release()  # synchronous — slot is now free
+        _sync_diag.info(
+            "slot released server=%d — slot=%s queue=%d",
+            server_id, _slot, len(_queue),
+        )
+        await start_next()  # immediately claims next (sync) then starts it (async)
+        await _persist_queue()  # persist queue to DB for crash recovery
 
 
 async def _start_queued_sync(server_id: int, queue_row: dict):
@@ -697,7 +805,7 @@ async def _start_queued_sync(server_id: int, queue_row: dict):
             (server_id,),
         )
         if not rows:
-            return
+            raise ValueError(f"Server {server_id} not found — deleted while queued?")
         server = dict(rows[0])
         server["password"] = decrypt_password(server["password"])
 
@@ -722,55 +830,6 @@ async def _start_queued_sync(server_id: int, queue_row: dict):
     finally:
         await db.close()
 
-    _active_syncs.add(server_id)
     asyncio.create_task(
         sync_server(server_id, server, full=full, start_folder=start_folder)
     )
-
-
-def cancel_sync(server_id: int):
-    """Request cancellation of an active sync."""
-    _cancel_requested.add(server_id)
-
-
-def claim_sync(server_id: int, *, auto: bool = False) -> bool:
-    """Atomically claim the sync slot. Returns False if any sync is already running."""
-    global _auto_sync_active
-    if _active_syncs:
-        logger.info("claim_sync(%d) DENIED — active: %s", server_id, _active_syncs)
-        return False
-    _active_syncs.add(server_id)
-    _auto_sync_active = server_id if auto else None
-    logger.info("claim_sync(%d) GRANTED (auto=%s)", server_id, auto)
-    return True
-
-
-def is_auto_sync_active() -> bool:
-    """True if the current sync slot is held by auto-sync."""
-    return _auto_sync_active is not None and _auto_sync_active in _active_syncs
-
-
-def clear_auto_sync_flag():
-    """Clear the auto-sync flag (called when auto-sync is pre-empted)."""
-    global _auto_sync_active
-    _auto_sync_active = None
-
-
-def clear_auto_sync_flag_if(server_id: int):
-    """Clear auto-sync flag if this server held it."""
-    global _auto_sync_active
-    if _auto_sync_active == server_id:
-        _auto_sync_active = None
-
-
-def get_active_sync_ids() -> list[int]:
-    """Return a copy of the active sync server IDs."""
-    return list(_active_syncs)
-
-
-def is_syncing(server_id: int) -> bool:
-    return server_id in _active_syncs
-
-
-def is_any_syncing() -> bool:
-    return len(_active_syncs) > 0

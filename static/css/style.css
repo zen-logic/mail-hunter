@@ -387,7 +387,7 @@ body {
 
 .server-item {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 0.35rem;
     padding: 0.25rem 0.5rem;
     cursor: pointer;
@@ -443,6 +443,13 @@ body {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.server-summary {
+    display: block;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
     white-space: nowrap;
 }
 

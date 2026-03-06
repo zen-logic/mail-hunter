@@ -9,6 +9,7 @@ __pycache__/
 archive/
 config.json
 .DS_Store
+*.log
 .claude/
 CLAUDE.md
 DEVLOG.md
