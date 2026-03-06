@@ -16,7 +16,8 @@ function authHeaders(extra = {}) {
 function apiFetch(url, opts = {}) {
     opts.headers = authHeaders(opts.headers || {});
     return fetch(url, opts).then(res => {
-        if (res.status === 401 && !url.startsWith('/api/auth/')) {
+        if (res.status === 401 && !url.startsWith('/api/auth/') && _authToken) {
+            // Session expired — clear and reload to show login
             localStorage.removeItem('mh-token');
             _authToken = null;
             location.reload();
