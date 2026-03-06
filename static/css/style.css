@@ -79,6 +79,7 @@ body {
     background: var(--color-bg);
     color: var(--color-text);
     text-shadow: var(--text-glow);
+    accent-color: var(--color-primary);
     height: 100vh;
     overflow: hidden;
 }
