@@ -430,9 +430,11 @@
       <h3>Search everything at once</h3>
       <p>
         Full-text search across all servers, all folders, all years.
-        Filter by sender, recipient, subject, body, date range, or tags.
-        Results come back fast because the index is local SQLite, not a
-        remote API with rate limits.
+        Filter by sender, recipient, subject, body, date range,
+        attachment filename, tags, duplicate status, or legal hold.
+        Save searches for one-click re-use. Results come back fast
+        because the index is local SQLite, not a remote API with
+        rate limits.
       </p>
     </div>
   </section>
@@ -446,8 +448,9 @@
         <h3>IMAP Sync</h3>
         <p>
           Incremental sync via UID checkpoints. Full resync and purge
-          options. Sync queue ensures one operation at a time. Progress
-          streamed live over WebSocket. Cancel and resume at any time.
+          options. Configurable auto-sync intervals per server. Sync queue
+          ensures one operation at a time. Progress streamed live over
+          WebSocket. Cancel and resume at any time.
         </p>
       </div>
 
@@ -465,7 +468,17 @@
         <p>
           Messages hashed by Message-ID and content. Identical messages
           across servers and folders stored once on disk. Duplicate
-          counts visible at a glance in the message list.
+          badges visible at a glance &mdash; click to see every copy
+          with its server and folder location.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <h3>Conversation Threading</h3>
+        <p>
+          Select any reply and click &ldquo;Show Thread&rdquo; to see
+          the full conversation reconstructed from In-Reply-To and
+          References headers, spanning servers and folders.
         </p>
       </div>
 
@@ -519,8 +532,17 @@
         <h3>Batch Operations</h3>
         <p>
           Select multiple messages with click, shift-click, or select-all.
-          Batch delete, batch tag, and batch export. Legal hold respected
-          across all bulk operations.
+          Batch delete, batch tag, batch hold, and batch export as zip.
+          Legal hold respected across all bulk operations.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <h3>Dashboard</h3>
+        <p>
+          Global stats with per-server breakdown of message counts,
+          duplicates, held messages, and storage usage. Click any
+          server to navigate directly.
         </p>
       </div>
 
