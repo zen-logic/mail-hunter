@@ -1202,6 +1202,10 @@ const selectedMailIds = new Set();
 let _anchorIdx = -1;
 
 async function loadServers() {
+    const container = document.getElementById('server-content');
+    if (!allServers.length) {
+        container.innerHTML = '<div class="empty-state"><div class="spinner"></div></div>';
+    }
     try {
         const resp = await fetch('/api/servers');
         if (!resp.ok) return;
@@ -1466,7 +1470,7 @@ function selectServer(id) {
     currentPage = 0;
     searchPanel.classList.add('hidden');
     searchToggleBtn.classList.remove('btn-active');
-    loadServers();
+    renderServers(allServers);
     loadMails();
     renderServerDetail();
 }
@@ -1992,6 +1996,7 @@ async function selectMail(id) {
     });
     _updateRowCheckboxes();
     _updateHeaderCheckbox();
+    document.getElementById('detail-content').innerHTML = '<div class="empty-state"><div class="spinner"></div></div>';
     try {
         const resp = await fetch(`/api/mails/${id}`);
         if (!resp.ok) return;

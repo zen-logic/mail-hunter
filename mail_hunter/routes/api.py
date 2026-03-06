@@ -60,19 +60,24 @@ async def list_servers(request: Request):
     rows = await db.execute_fetchall(
         "SELECT id, name, host, port, username, last_sync, is_gmail, sync_enabled, sync_interval FROM servers ORDER BY name COLLATE NOCASE"
     )
+    # Fetch all folders with counts in one query (avoids N+1)
+    all_folders = await db.execute_fetchall(
+        "SELECT f.id, f.server_id, f.name, f.label_tag, "
+        "CASE WHEN f.label_tag IS NOT NULL THEN "
+        "  (SELECT COUNT(*) FROM tags t JOIN mails m ON t.mail_id = m.id "
+        "   WHERE t.tag = f.label_tag AND m.server_id = f.server_id) "
+        "ELSE "
+        "  (SELECT COUNT(*) FROM mails m WHERE m.folder_id = f.id) "
+        "END as count "
+        "FROM folders f ORDER BY f.name"
+    )
+    folders_by_server = {}
+    for f in all_folders:
+        folders_by_server.setdefault(f["server_id"], []).append(
+            {"name": f["name"], "count": f["count"]}
+        )
     servers = []
     for r in rows:
-        folders = await db.execute_fetchall(
-            "SELECT f.id, f.name, f.label_tag, "
-            "CASE WHEN f.label_tag IS NOT NULL THEN "
-            "  (SELECT COUNT(*) FROM tags t JOIN mails m ON t.mail_id = m.id "
-            "   WHERE t.tag = f.label_tag AND m.server_id = f.server_id) "
-            "ELSE "
-            "  (SELECT COUNT(*) FROM mails m WHERE m.folder_id = f.id) "
-            "END as count "
-            "FROM folders f WHERE f.server_id = ? ORDER BY f.name",
-            (r["id"],),
-        )
         servers.append(
             {
                 "id": r["id"],
@@ -85,7 +90,7 @@ async def list_servers(request: Request):
                 "sync_enabled": bool(r["sync_enabled"]),
                 "sync_interval": r["sync_interval"],
                 "syncing": is_syncing(r["id"]),
-                "folders": [{"name": f["name"], "count": f["count"]} for f in folders],
+                "folders": folders_by_server.get(r["id"], []),
             }
         )
     return JSONResponse(servers)
@@ -798,6 +803,14 @@ def _archive_disk_usage() -> int:
     return total
 
 
+_archive_size_cache: dict[str, int] = {"value": 0}
+
+
+async def _refresh_archive_size():
+    """Refresh the cached archive size in the background."""
+    _archive_size_cache["value"] = await asyncio.to_thread(_archive_disk_usage)
+
+
 async def get_stats(request: Request):
     db = await get_db()
     row = await db.execute_fetchall(
@@ -809,7 +822,9 @@ async def get_stats(request: Request):
     stats = dict(row[0]) if row else {"messages": 0, "duplicates": 0, "held": 0}
     server_row = await db.execute_fetchall("SELECT COUNT(*) as cnt FROM servers")
     stats["servers"] = server_row[0]["cnt"] if server_row else 0
-    stats["archive_size"] = await asyncio.to_thread(_archive_disk_usage)
+    stats["archive_size"] = _archive_size_cache["value"]
+    # Refresh in background for next request
+    asyncio.create_task(_refresh_archive_size())
     return JSONResponse(stats)
 
 
