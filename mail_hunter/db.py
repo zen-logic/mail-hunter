@@ -180,6 +180,25 @@ CREATE TABLE IF NOT EXISTS saved_searches (
 )
 """
 
+USERS_TABLE = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL DEFAULT '',
+    password_hash TEXT NOT NULL,
+    date_created TEXT NOT NULL
+);
+"""
+
+SESSIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token TEXT NOT NULL UNIQUE,
+    date_created TEXT NOT NULL
+);
+"""
+
 INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_mails_server_id ON mails(server_id)",
     "CREATE INDEX IF NOT EXISTS idx_mails_message_id ON mails(message_id)",
@@ -242,6 +261,8 @@ async def init_db(db: aiosqlite.Connection):
     await db.execute(SYNC_STATE_TABLE)
     await db.execute(SYNC_QUEUE_TABLE)
     await db.execute(SAVED_SEARCHES_TABLE)
+    await db.execute(USERS_TABLE)
+    await db.execute(SESSIONS_TABLE)
     for idx_sql in INDEXES:
         await db.execute(idx_sql)
     await db.commit()

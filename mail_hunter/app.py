@@ -46,6 +46,17 @@ from mail_hunter.routes.api import (
     batch_move,
     batch_copy,
 )
+from mail_hunter.routes.auth import (
+    auth_status,
+    auth_setup,
+    auth_login,
+    auth_logout,
+    auth_me,
+    list_users,
+    create_user,
+    update_user,
+    delete_user,
+)
 from mail_hunter.routes.import_mail import import_upload
 from mail_hunter.routes.sync import (
     sync_endpoint,
@@ -55,6 +66,7 @@ from mail_hunter.routes.sync import (
     backfill_labels_endpoint,
     stop_backfill,
 )
+from mail_hunter.middleware import AuthMiddleware
 from mail_hunter.services.imap import enqueue, start_next, _queue, _sync_diag
 from mail_hunter.services.auto_sync import start_auto_sync, stop_auto_sync
 
@@ -158,6 +170,16 @@ async def on_shutdown():
 routes = [
     Route("/", homepage),
     WebSocketRoute("/ws", ws_endpoint),
+    # Auth routes
+    Route("/api/auth/status", auth_status, methods=["GET"]),
+    Route("/api/auth/setup", auth_setup, methods=["POST"]),
+    Route("/api/auth/login", auth_login, methods=["POST"]),
+    Route("/api/auth/logout", auth_logout, methods=["POST"]),
+    Route("/api/auth/me", auth_me, methods=["GET"]),
+    Route("/api/auth/users", list_users, methods=["GET"]),
+    Route("/api/auth/users", create_user, methods=["POST"]),
+    Route("/api/auth/users/{id:int}", update_user, methods=["PATCH"]),
+    Route("/api/auth/users/{id:int}", delete_user, methods=["DELETE"]),
     # Archive routes
     Route("/api/archives", create_archive, methods=["POST"]),
     Route(
@@ -249,3 +271,4 @@ app = Starlette(
     on_startup=[on_startup],
     on_shutdown=[on_shutdown],
 )
+app = AuthMiddleware(app)

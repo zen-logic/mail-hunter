@@ -2,6 +2,29 @@
 
 import { themeNames, applyTheme } from './themes.js';
 
+// ── Auth ────────────────────────────────────────────────
+
+let _authToken = localStorage.getItem('mh-token');
+let _currentUser = null;
+
+function authHeaders(extra = {}) {
+    const h = { ...extra };
+    if (_authToken) h['Authorization'] = `Bearer ${_authToken}`;
+    return h;
+}
+
+function apiFetch(url, opts = {}) {
+    opts.headers = authHeaders(opts.headers || {});
+    return fetch(url, opts).then(res => {
+        if (res.status === 401 && !url.startsWith('/api/auth/')) {
+            localStorage.removeItem('mh-token');
+            _authToken = null;
+            location.reload();
+        }
+        return res;
+    });
+}
+
 // ── Helpers ─────────────────────────────────────────────
 
 function esc(str) {
@@ -377,7 +400,8 @@ let wsRetryDelay = 1000;
 
 function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${proto}//${location.host}/ws`);
+    const token = _authToken || '';
+    ws = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
 
     ws.addEventListener('open', () => {
         wsRetryDelay = 1000;
@@ -587,8 +611,6 @@ function handleWSMessage(msg) {
     }
 }
 
-connectWS();
-
 // ── Global stats ────────────────────────────────────────
 
 let _lastStats = null;
@@ -606,7 +628,7 @@ function updateStatsBar() {
 
 async function loadStats() {
     try {
-        const resp = await fetch('/api/stats');
+        const resp = await apiFetch('/api/stats');
         if (!resp.ok) return;
         _lastStats = await resp.json();
         updateStatsBar();
@@ -688,7 +710,7 @@ function renderGlobalStats() {
     `;
 
     // Load per-server stats
-    fetch('/api/stats/servers').then(r => r.json()).then(servers => {
+    apiFetch('/api/stats/servers').then(r => r.json()).then(servers => {
         const el = document.getElementById('server-stats-content');
         if (!el) return;
         if (!servers.length) {
@@ -742,7 +764,7 @@ function renderSyncStatus(detail, serverId) {
             statusActivity.innerHTML = '<span class="status-sync-text">Cancelling...</span>';
             renderServers(allServers);
             try {
-                await fetch(`/api/servers/${_statusBarSyncId}/sync/cancel`, { method: 'POST' });
+                await apiFetch(`/api/servers/${_statusBarSyncId}/sync/cancel`, { method: 'POST' });
             } catch (err) {
                 console.error('Cancel failed:', err);
             }
@@ -764,7 +786,7 @@ function renderBackfillStatus(detail) {
     document.getElementById('status-cancel-backfill')?.addEventListener('click', async () => {
         if (backfillingServerId) {
             try {
-                await fetch(`/api/servers/${backfillingServerId}/backfill/cancel`, { method: 'POST' });
+                await apiFetch(`/api/servers/${backfillingServerId}/backfill/cancel`, { method: 'POST' });
             } catch (err) {
                 console.error('Cancel failed:', err);
             }
@@ -788,7 +810,7 @@ document.getElementById('btn-new-archive').addEventListener('click', async () =>
     const name = await showPrompt('Archive name:', { title: 'New Archive', placeholder: 'My Archive' });
     if (!name) return;
     try {
-        const resp = await fetch('/api/archives', {
+        const resp = await apiFetch('/api/archives', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name }),
@@ -882,7 +904,7 @@ searchFields.forEach(id => {
 
 async function loadSavedSearches() {
     try {
-        const resp = await fetch('/api/searches');
+        const resp = await apiFetch('/api/searches');
         if (!resp.ok) return;
         const searches = await resp.json();
         renderSavedSearches(searches);
@@ -942,7 +964,7 @@ function renderSavedSearches(searches) {
         el.addEventListener('click', async (e) => {
             e.stopPropagation();
             try {
-                await fetch(`/api/searches/${el.dataset.id}`, { method: 'DELETE' });
+                await apiFetch(`/api/searches/${el.dataset.id}`, { method: 'DELETE' });
                 loadSavedSearches();
             } catch (err) {
                 console.error('Failed to delete saved search:', err);
@@ -957,7 +979,7 @@ document.getElementById('search-save').addEventListener('click', async () => {
     const name = await showPrompt('Save search as:', { title: 'Save Search', placeholder: 'Search name...' });
     if (!name) return;
     try {
-        await fetch('/api/searches', {
+        await apiFetch('/api/searches', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, params }),
@@ -985,7 +1007,7 @@ async function doSearch() {
     container.innerHTML = '<div class="empty-state"><div class="spinner"></div></div>';
     try {
         const qs = new URLSearchParams(params).toString();
-        const resp = await fetch(`/api/mails/search?${qs}`);
+        const resp = await apiFetch(`/api/mails/search?${qs}`);
         if (!resp.ok) return;
         const data = await resp.json();
         titleEl.textContent = 'Search Results';
@@ -1098,9 +1120,17 @@ settingsModal.addEventListener('click', (e) => {
 
 async function renderSettings() {
     let servers = [];
+    let users = [];
     try {
-        const resp = await fetch('/api/servers');
-        if (resp.ok) servers = await resp.json();
+        const [sResp, uResp] = await Promise.all([
+            apiFetch('/api/servers'),
+            apiFetch('/api/auth/users'),
+        ]);
+        if (sResp.ok) servers = await sResp.json();
+        if (uResp.ok) {
+            const uData = await uResp.json();
+            users = uData.users || [];
+        }
     } catch (err) { /* empty */ }
 
     // Theme dropdown options
@@ -1127,6 +1157,20 @@ async function renderSettings() {
         }
     }
 
+    // User rows
+    let userRows = '';
+    for (const u of users) {
+        const isSelf = _currentUser && _currentUser.id === u.id;
+        userRows += `<tr>
+            <td>${esc(u.username)}${isSelf ? ' <em>(you)</em>' : ''}</td>
+            <td>${esc(u.displayName || '')}</td>
+            <td class="settings-user-actions">
+                <button class="btn btn-sm settings-edit-user" data-uid="${u.id}">Edit</button>
+                ${isSelf ? '' : `<button class="btn btn-sm btn-danger settings-delete-user" data-uid="${u.id}">Delete</button>`}
+            </td>
+        </tr>`;
+    }
+
     settingsContent.innerHTML = `
         <div class="settings-section">
             <div class="settings-section-title">Appearance</div>
@@ -1150,6 +1194,22 @@ async function renderSettings() {
                 </div>
                 <div id="settings-server-form-container"></div>
             </div>
+        </div>
+        <div class="settings-section">
+            <div class="settings-section-title">Users</div>
+            <div class="settings-row">
+                <table class="settings-users-table">
+                    <thead><tr><th>Username</th><th>Display Name</th><th></th></tr></thead>
+                    <tbody id="settings-users-body">${userRows}</tbody>
+                </table>
+                <div style="margin-top: 0.5rem;">
+                    <button class="btn btn-sm" id="settings-add-user">+ Add User</button>
+                </div>
+                <div id="settings-user-form-container"></div>
+            </div>
+        </div>
+        <div class="settings-section settings-footer">
+            <button class="btn settings-btn-logout" id="settings-logout">Log Out</button>
         </div>
     `;
 
@@ -1178,15 +1238,137 @@ async function renderSettings() {
             const id = parseInt(btn.dataset.delete);
             const server = servers.find(s => s.id === id);
             if (!await showConfirm(`Delete server "${server?.name}" and all its messages?`)) return;
-            // Remove from tree immediately
             allServers = allServers.filter(s => s.id !== id);
             renderServers(allServers);
             if (selectedServerId === id) clearSelection();
             renderSettings();
-            fetch(`/api/servers/${id}`, { method: 'DELETE' }).catch(err => {
+            apiFetch(`/api/servers/${id}`, { method: 'DELETE' }).catch(err => {
                 console.error('Delete failed:', err);
             });
         });
+    });
+
+    // User management
+    settingsContent.querySelectorAll('.settings-edit-user').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const uid = parseInt(btn.dataset.uid);
+            const user = users.find(u => u.id === uid);
+            if (user) showEditUserForm(user);
+        });
+    });
+
+    settingsContent.querySelectorAll('.settings-delete-user').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const uid = parseInt(btn.dataset.uid);
+            const user = users.find(u => u.id === uid);
+            if (user && await showConfirm(`Delete user "${user.username}"?`)) {
+                await apiFetch(`/api/auth/users/${uid}`, { method: 'DELETE' });
+                renderSettings();
+            }
+        });
+    });
+
+    document.getElementById('settings-add-user').addEventListener('click', () => showAddUserForm());
+
+    // Logout
+    document.getElementById('settings-logout').addEventListener('click', async () => {
+        await apiFetch('/api/auth/logout', { method: 'POST' });
+        localStorage.removeItem('mh-token');
+        _authToken = null;
+        _currentUser = null;
+        location.reload();
+    });
+}
+
+function showAddUserForm() {
+    const container = document.getElementById('settings-user-form-container');
+    container.innerHTML = `
+        <div class="settings-server-form">
+            <div class="settings-server-form-fields">
+                <input class="modal-input" id="new-user-username" placeholder="Username" autocomplete="off">
+                <input class="modal-input" id="new-user-display" placeholder="Display Name" autocomplete="off">
+                <input class="modal-input modal-input-full" id="new-user-password" type="password" placeholder="Password" autocomplete="new-password">
+            </div>
+            <div class="settings-server-form-actions">
+                <button class="btn btn-sm" id="new-user-cancel">Cancel</button>
+                <button class="btn btn-sm btn-primary" id="new-user-save">Save</button>
+            </div>
+            <p class="modal-error hidden" id="new-user-error"></p>
+        </div>
+    `;
+    document.getElementById('new-user-username').focus();
+    document.getElementById('new-user-cancel').addEventListener('click', () => { container.innerHTML = ''; });
+    document.getElementById('new-user-save').addEventListener('click', async () => {
+        const username = document.getElementById('new-user-username').value.trim();
+        const displayName = document.getElementById('new-user-display').value.trim();
+        const password = document.getElementById('new-user-password').value;
+        const errEl = document.getElementById('new-user-error');
+        if (!username || !password) {
+            errEl.textContent = 'Username and password required.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        const resp = await apiFetch('/api/auth/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password, displayName }),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            renderSettings();
+        } else {
+            errEl.textContent = data.error || 'Failed to create user.';
+            errEl.classList.remove('hidden');
+        }
+    });
+}
+
+function showEditUserForm(user) {
+    const container = document.getElementById('settings-user-form-container');
+    container.innerHTML = `
+        <div class="settings-server-form">
+            <div class="settings-server-form-fields">
+                <input class="modal-input" id="edit-user-username" value="${esc(user.username)}" autocomplete="off">
+                <input class="modal-input" id="edit-user-display" value="${esc(user.displayName || '')}" placeholder="Display Name" autocomplete="off">
+                <input class="modal-input modal-input-full" id="edit-user-password" type="password" placeholder="New password (leave blank to keep)" autocomplete="new-password">
+            </div>
+            <div class="settings-server-form-actions">
+                <button class="btn btn-sm" id="edit-user-cancel">Cancel</button>
+                <button class="btn btn-sm btn-primary" id="edit-user-save">Save</button>
+            </div>
+            <p class="modal-error hidden" id="edit-user-error"></p>
+        </div>
+    `;
+    document.getElementById('edit-user-username').focus();
+    document.getElementById('edit-user-cancel').addEventListener('click', () => renderSettings());
+    document.getElementById('edit-user-save').addEventListener('click', async () => {
+        const username = document.getElementById('edit-user-username').value.trim();
+        const displayName = document.getElementById('edit-user-display').value.trim();
+        const password = document.getElementById('edit-user-password').value;
+        const errEl = document.getElementById('edit-user-error');
+        if (!username) {
+            errEl.textContent = 'Username is required.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        const body = { username, displayName };
+        if (password) body.password = password;
+        const resp = await apiFetch(`/api/auth/users/${user.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            if (_currentUser && _currentUser.id === user.id) {
+                _currentUser.username = username;
+                _currentUser.displayName = displayName;
+            }
+            renderSettings();
+        } else {
+            errEl.textContent = data.error || 'Failed to update user.';
+            errEl.classList.remove('hidden');
+        }
     });
 }
 
@@ -1233,13 +1415,13 @@ function showServerForm(existing) {
         try {
             let resp;
             if (existing) {
-                resp = await fetch(`/api/servers/${existing.id}`, {
+                resp = await apiFetch(`/api/servers/${existing.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data),
                 });
             } else {
-                resp = await fetch('/api/servers', {
+                resp = await apiFetch('/api/servers', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data),
@@ -1369,7 +1551,7 @@ document.getElementById('import-go').addEventListener('click', async () => {
         }
         formData.append('server_name', importServerName(importFiles));
 
-        const resp = await fetch('/api/import', { method: 'POST', body: formData });
+        const resp = await apiFetch('/api/import', { method: 'POST', body: formData });
         const result = await resp.json();
 
         if (!resp.ok) {
@@ -1435,7 +1617,7 @@ async function startDirectImport(files) {
     formData.append('server_name', importServerName(files));
 
     try {
-        const resp = await fetch('/api/import', { method: 'POST', body: formData });
+        const resp = await apiFetch('/api/import', { method: 'POST', body: formData });
         const result = await resp.json();
 
         if (!resp.ok) {
@@ -1465,7 +1647,7 @@ async function loadServers() {
         container.innerHTML = '<div class="empty-state"><div class="spinner"></div></div>';
     }
     try {
-        const resp = await fetch('/api/servers');
+        const resp = await apiFetch('/api/servers');
         if (!resp.ok) return;
         allServers = await resp.json();
         // Sync state comes exclusively from WebSocket replay (_sync_state).
@@ -1695,7 +1877,7 @@ function renderServers(servers) {
             );
             if (!ok) return;
             try {
-                await fetch(`/api/servers/${sid}/sync/queue`, { method: 'DELETE' });
+                await apiFetch(`/api/servers/${sid}/sync/queue`, { method: 'DELETE' });
             } catch (err) {
                 console.error('Dequeue failed:', err);
             }
@@ -1791,7 +1973,7 @@ async function renderServerDetail() {
 
         document.getElementById('btn-sync-folder')?.addEventListener('click', async () => {
             try {
-                const resp = await fetch(`/api/servers/${server.id}/sync?folder=${encodeURIComponent(selectedFolder)}`, { method: 'POST' });
+                const resp = await apiFetch(`/api/servers/${server.id}/sync?folder=${encodeURIComponent(selectedFolder)}`, { method: 'POST' });
                 if (resp.ok) {
                     renderServerDetail();
                 } else {
@@ -1804,7 +1986,7 @@ async function renderServerDetail() {
         });
 
         document.getElementById('btn-export-mbox')?.addEventListener('click', () => {
-            window.location.href = `/api/archives/${server.id}/folders/export?folder=${encodeURIComponent(selectedFolder)}`;
+            window.location.href = `/api/archives/${server.id}/folders/export?folder=${encodeURIComponent(selectedFolder)}&token=${encodeURIComponent(_authToken || '')}`;
         });
 
         document.getElementById('btn-delete-folder-msgs')?.addEventListener('click', async () => {
@@ -1813,7 +1995,7 @@ async function renderServerDetail() {
                 : `Delete all ${msgCount} messages in "${leafName}"?`;
             if (!await showConfirm(confirmMsg)) return;
             try {
-                const resp = await fetch(deleteEndpoint, { method: 'DELETE' });
+                const resp = await apiFetch(deleteEndpoint, { method: 'DELETE' });
                 if (resp.ok) {
                     selectedFolder = null;
                     loadServers();
@@ -1857,7 +2039,7 @@ async function renderServerDetail() {
             const name = await showPrompt('Folder name:', { title: 'New Folder', placeholder: 'Projects/2024' });
             if (!name) return;
             try {
-                const resp = await fetch(`/api/archives/${server.id}/folders`, {
+                const resp = await apiFetch(`/api/archives/${server.id}/folders`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name }),
@@ -1880,7 +2062,7 @@ async function renderServerDetail() {
             allServers = allServers.filter(s => s.id !== server.id);
             renderServers(allServers);
             clearSelection();
-            fetch(`/api/servers/${server.id}`, { method: 'DELETE' }).catch(err => {
+            apiFetch(`/api/servers/${server.id}`, { method: 'DELETE' }).catch(err => {
                 console.error('Delete failed:', err);
             });
         });
@@ -1923,7 +2105,7 @@ async function renderServerDetail() {
     document.getElementById('btn-sync-server')?.addEventListener('click', async () => {
         try {
             const folderParam = selectedFolder ? `?folder=${encodeURIComponent(selectedFolder)}` : '';
-            const resp = await fetch(`/api/servers/${server.id}/sync${folderParam}`, { method: 'POST' });
+            const resp = await apiFetch(`/api/servers/${server.id}/sync${folderParam}`, { method: 'POST' });
             if (resp.ok) {
                 renderServerDetail();
             } else {
@@ -1942,7 +2124,7 @@ async function renderServerDetail() {
             { title: 'Full Sync', okLabel: 'Full Sync' }
         )) return;
         try {
-            const resp = await fetch(`/api/servers/${server.id}/sync?full=1`, { method: 'POST' });
+            const resp = await apiFetch(`/api/servers/${server.id}/sync?full=1`, { method: 'POST' });
             if (resp.ok) {
                 renderServerDetail();
             } else {
@@ -1968,7 +2150,7 @@ async function renderServerDetail() {
             document.getElementById('mail-count').textContent = '';
         }
         try {
-            const resp = await fetch(`/api/servers/${server.id}/sync?purge=1`, { method: 'POST' });
+            const resp = await apiFetch(`/api/servers/${server.id}/sync?purge=1`, { method: 'POST' });
             if (resp.ok) {
                 loadServers();
                 renderServerDetail();
@@ -1990,7 +2172,7 @@ async function renderServerDetail() {
         if (btn) { btn.textContent = 'Cancelling...'; btn.disabled = true; }
         renderServers(allServers);
         try {
-            await fetch(`/api/servers/${server.id}/sync/cancel`, { method: 'POST' });
+            await apiFetch(`/api/servers/${server.id}/sync/cancel`, { method: 'POST' });
         } catch (err) {
             console.error('Cancel failed:', err);
         }
@@ -1999,7 +2181,7 @@ async function renderServerDetail() {
     // Backfill labels
     document.getElementById('btn-backfill-labels')?.addEventListener('click', async () => {
         try {
-            const resp = await fetch(`/api/servers/${server.id}/backfill`, { method: 'POST' });
+            const resp = await apiFetch(`/api/servers/${server.id}/backfill`, { method: 'POST' });
             if (resp.ok) {
                 ActivityLog.add('Label backfill started');
             } else {
@@ -2017,7 +2199,7 @@ async function renderServerDetail() {
         btn.disabled = true;
         btn.textContent = 'Testing...';
         try {
-            const resp = await fetch(`/api/servers/${server.id}/test`, { method: 'POST' });
+            const resp = await apiFetch(`/api/servers/${server.id}/test`, { method: 'POST' });
             const result = await resp.json();
             if (result.ok) {
                 ActivityLog.add(`Connection OK — ${result.folders.length} folders: ${result.folders.join(', ')}`);
@@ -2040,7 +2222,7 @@ async function renderServerDetail() {
         allServers = allServers.filter(s => s.id !== server.id);
         renderServers(allServers);
         clearSelection();
-        fetch(`/api/servers/${server.id}`, { method: 'DELETE' }).catch(err => {
+        apiFetch(`/api/servers/${server.id}`, { method: 'DELETE' }).catch(err => {
             console.error('Delete failed:', err);
         });
     });
@@ -2067,7 +2249,7 @@ async function loadMails() {
             page: currentPage,
         });
         if (selectedFolder) params.set('folder', selectedFolder);
-        const resp = await fetch(`/api/servers/${selectedServerId}/mails?${params}`);
+        const resp = await apiFetch(`/api/servers/${selectedServerId}/mails?${params}`);
         if (!resp.ok) return;
         const data = await resp.json();
         totalMails = data.total;
@@ -2155,7 +2337,7 @@ async function _fetchAllIds() {
         } else {
             return null;
         }
-        const resp = await fetch(url);
+        const resp = await apiFetch(url);
         if (!resp.ok) return null;
         const data = await resp.json();
         return data.ids;
@@ -2361,7 +2543,7 @@ async function selectMail(id) {
     _updateHeaderCheckbox();
     document.getElementById('detail-content').innerHTML = '<div class="empty-state"><div class="spinner"></div></div>';
     try {
-        const resp = await fetch(`/api/mails/${id}`);
+        const resp = await apiFetch(`/api/mails/${id}`);
         if (!resp.ok) return;
         const mail = await resp.json();
 
@@ -2505,7 +2687,7 @@ function renderDetail(mail) {
         const target = await showFolderPicker({ title: 'Move to...' });
         if (!target) return;
         try {
-            const resp = await fetch('/api/mails/batch/move', {
+            const resp = await apiFetch('/api/mails/batch/move', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mail_ids: [mail.id], server_id: target.server_id, folder_id: target.folder_id }),
@@ -2528,7 +2710,7 @@ function renderDetail(mail) {
         const target = await showFolderPicker({ title: 'Copy to...' });
         if (!target) return;
         try {
-            const resp = await fetch('/api/mails/batch/copy', {
+            const resp = await apiFetch('/api/mails/batch/copy', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mail_ids: [mail.id], server_id: target.server_id, folder_id: target.folder_id }),
@@ -2560,7 +2742,7 @@ function renderDetail(mail) {
     // Show duplicates
     document.getElementById('btn-show-dups')?.addEventListener('click', async () => {
         try {
-            const resp = await fetch(`/api/mails/${mail.id}/duplicates?sort=${sortKey}&sortDir=${sortDirParam()}`);
+            const resp = await apiFetch(`/api/mails/${mail.id}/duplicates?sort=${sortKey}&sortDir=${sortDirParam()}`);
             if (!resp.ok) return;
             const data = await resp.json();
             customMailView = true;
@@ -2578,7 +2760,7 @@ function renderDetail(mail) {
     // Show thread
     document.getElementById('btn-show-thread')?.addEventListener('click', async () => {
         try {
-            const resp = await fetch(`/api/mails/${mail.id}/thread`);
+            const resp = await apiFetch(`/api/mails/${mail.id}/thread`);
             if (!resp.ok) return;
             const data = await resp.json();
             customMailView = true;
@@ -2596,7 +2778,7 @@ function renderDetail(mail) {
     // View message
     document.getElementById('btn-view-message')?.addEventListener('click', async () => {
         try {
-            const res = await fetch(`/api/mails/${mail.id}/preview`);
+            const res = await apiFetch(`/api/mails/${mail.id}/preview`);
             if (!res.ok) return;
             const data = await res.json();
             showMessagePreview(mail, data.body_text, data.body_html, data.raw_source);
@@ -2607,13 +2789,13 @@ function renderDetail(mail) {
 
     // Download EML
     document.getElementById('btn-download-eml')?.addEventListener('click', () => {
-        window.location.href = `/api/mails/${mail.id}/raw`;
+        window.location.href = `/api/mails/${mail.id}/raw?token=${encodeURIComponent(_authToken || '')}`;
     });
 
     // Export as zip
     document.getElementById('btn-export-zip')?.addEventListener('click', async () => {
         try {
-            const resp = await fetch('/api/mails/batch/export', {
+            const resp = await apiFetch('/api/mails/batch/export', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mail_ids: [mail.id] }),
@@ -2636,14 +2818,14 @@ function renderDetail(mail) {
     // Attachment downloads
     container.querySelectorAll('[data-att-idx]').forEach(btn => {
         btn.addEventListener('click', () => {
-            window.location.href = `/api/mails/${mail.id}/attachments/${btn.dataset.attIdx}`;
+            window.location.href = `/api/mails/${mail.id}/attachments/${btn.dataset.attIdx}?token=${encodeURIComponent(_authToken || '')}`;
         });
     });
 
     // Toggle legal hold
     document.getElementById('btn-toggle-hold')?.addEventListener('click', async () => {
         try {
-            const resp = await fetch(`/api/mails/${mail.id}/hold`, { method: 'PUT' });
+            const resp = await apiFetch(`/api/mails/${mail.id}/hold`, { method: 'PUT' });
             if (!resp.ok) return;
             const data = await resp.json();
             mail.legal_hold = data.legal_hold;
@@ -2661,7 +2843,7 @@ function renderDetail(mail) {
     document.getElementById('btn-delete-mail')?.addEventListener('click', async () => {
         if (!await showConfirm('Delete this message?')) return;
         try {
-            const resp = await fetch(`/api/mails/${mail.id}`, { method: 'DELETE' });
+            const resp = await apiFetch(`/api/mails/${mail.id}`, { method: 'DELETE' });
             if (resp.ok) {
                 selectedMailId = null;
                 currentMails = currentMails.filter(m => m.id !== mail.id);
@@ -2684,7 +2866,7 @@ function renderDetail(mail) {
         const tag = tagInput.value.trim();
         if (!tag) return;
         try {
-            await fetch(`/api/mails/${mail.id}/tags`, {
+            await apiFetch(`/api/mails/${mail.id}/tags`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ tag }),
@@ -2703,7 +2885,7 @@ function renderDetail(mail) {
     container.querySelectorAll('.tag-remove').forEach(el => {
         el.addEventListener('click', async () => {
             try {
-                await fetch(`/api/mails/${mail.id}/tags/${encodeURIComponent(el.dataset.tag)}`, {
+                await apiFetch(`/api/mails/${mail.id}/tags/${encodeURIComponent(el.dataset.tag)}`, {
                     method: 'DELETE',
                 });
                 selectMail(mail.id);
@@ -2772,7 +2954,7 @@ function renderMultiSelect() {
     const batchHoldHandler = async (hold) => {
         const label = hold ? 'hold' : 'release';
         try {
-            const resp = await fetch('/api/mails/batch/hold', {
+            const resp = await apiFetch('/api/mails/batch/hold', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mail_ids: [...selectedMailIds], hold }),
@@ -2797,7 +2979,7 @@ function renderMultiSelect() {
         const target = await showFolderPicker({ title: 'Move to...' });
         if (!target) return;
         try {
-            const resp = await fetch('/api/mails/batch/move', {
+            const resp = await apiFetch('/api/mails/batch/move', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mail_ids: [...selectedMailIds], server_id: target.server_id, folder_id: target.folder_id }),
@@ -2826,7 +3008,7 @@ function renderMultiSelect() {
         const target = await showFolderPicker({ title: 'Copy to...' });
         if (!target) return;
         try {
-            const resp = await fetch('/api/mails/batch/copy', {
+            const resp = await apiFetch('/api/mails/batch/copy', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mail_ids: [...selectedMailIds], server_id: target.server_id, folder_id: target.folder_id }),
@@ -2844,7 +3026,7 @@ function renderMultiSelect() {
     // Batch export
     document.getElementById('btn-batch-export')?.addEventListener('click', async () => {
         try {
-            const resp = await fetch('/api/mails/batch/export', {
+            const resp = await apiFetch('/api/mails/batch/export', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mail_ids: [...selectedMailIds] }),
@@ -2869,7 +3051,7 @@ function renderMultiSelect() {
     document.getElementById('btn-batch-delete')?.addEventListener('click', async () => {
         if (!await showConfirm(`Delete ${selectedMailIds.size} messages?`)) return;
         try {
-            const resp = await fetch('/api/mails/batch/delete', {
+            const resp = await apiFetch('/api/mails/batch/delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mail_ids: [...selectedMailIds] }),
@@ -2899,7 +3081,7 @@ function renderMultiSelect() {
         const tag = batchTagInput.value.trim();
         if (!tag) return;
         try {
-            const resp = await fetch('/api/mails/batch/tags', {
+            const resp = await apiFetch('/api/mails/batch/tags', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mail_ids: [...selectedMailIds], add_tags: [tag] }),
@@ -2925,7 +3107,7 @@ const aboutContent = document.getElementById('about-content');
 async function openAbout() {
     let version = '\u2026';
     try {
-        const res = await fetch('/api/version');
+        const res = await apiFetch('/api/version');
         if (res.ok) {
             const data = await res.json();
             version = data.version;
@@ -3328,8 +3510,232 @@ document.addEventListener('keydown', (e) => {
 // Set initial active panel
 setActivePanel('server');
 
+// ── Auth UI ─────────────────────────────────────────────
+
+function showLoginScreen(serverName) {
+    const screen = document.getElementById('login-screen');
+    screen.classList.remove('hidden');
+    document.getElementById('app').classList.add('hidden');
+    const title = serverName ? `Mail Hunter — ${esc(serverName)}` : 'Mail Hunter';
+    screen.innerHTML = `
+        <div class="login-card">
+            <h1 class="login-title">${title}</h1>
+            <div class="login-field">
+                <label class="login-label" for="login-username">Username</label>
+                <input type="text" class="modal-input" id="login-username" autocomplete="username">
+            </div>
+            <div class="login-field">
+                <label class="login-label" for="login-password">Password</label>
+                <input type="password" class="modal-input" id="login-password" autocomplete="current-password">
+            </div>
+            <p class="login-error hidden" id="login-error"></p>
+            <button class="btn btn-primary login-btn" id="login-submit">Log In</button>
+            <div class="login-theme-row">
+                <label class="login-label" for="login-theme">Theme</label>
+                <select class="search-select" id="login-theme"></select>
+            </div>
+        </div>
+    `;
+    wireLoginThemeSelector();
+    const submit = document.getElementById('login-submit');
+    screen.querySelectorAll('input').forEach(input => {
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit.click(); });
+    });
+    submit.addEventListener('click', handleLogin);
+    document.getElementById('login-username').focus();
+}
+
+function showSetupScreen() {
+    const screen = document.getElementById('login-screen');
+    screen.classList.remove('hidden');
+    document.getElementById('app').classList.add('hidden');
+    screen.innerHTML = `
+        <div class="login-card">
+            <h1 class="login-title">Welcome to Mail Hunter</h1>
+            <p class="login-subtitle">Create your admin account to get started.</p>
+            <div class="login-field">
+                <label class="login-label" for="setup-username">Username</label>
+                <input type="text" class="modal-input" id="setup-username" autocomplete="username">
+            </div>
+            <div class="login-field">
+                <label class="login-label" for="setup-display">Display Name</label>
+                <input type="text" class="modal-input" id="setup-display" placeholder="Optional" autocomplete="name">
+            </div>
+            <div class="login-field">
+                <label class="login-label" for="setup-password">Password</label>
+                <input type="password" class="modal-input" id="setup-password" autocomplete="new-password">
+            </div>
+            <div class="login-field">
+                <label class="login-label" for="setup-confirm">Confirm Password</label>
+                <input type="password" class="modal-input" id="setup-confirm" autocomplete="new-password">
+            </div>
+            <p class="login-error hidden" id="setup-error"></p>
+            <button class="btn btn-primary login-btn" id="setup-submit">Create Account</button>
+            <div class="login-theme-row">
+                <label class="login-label" for="login-theme">Theme</label>
+                <select class="search-select" id="login-theme"></select>
+            </div>
+        </div>
+    `;
+    wireLoginThemeSelector();
+    const submit = document.getElementById('setup-submit');
+    screen.querySelectorAll('input').forEach(input => {
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit.click(); });
+    });
+    submit.addEventListener('click', handleSetup);
+    document.getElementById('setup-username').focus();
+}
+
+function wireLoginThemeSelector() {
+    const sel = document.getElementById('login-theme');
+    if (!sel) return;
+    const saved = localStorage.getItem('mh-theme') || 'default';
+    const sorted = ['default', ...themeNames.filter(n => n !== 'default').sort()];
+    for (const name of sorted) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name.replace(/\b\w/g, c => c.toUpperCase());
+        sel.appendChild(opt);
+    }
+    if (themeNames.includes(saved)) sel.value = saved;
+    sel.addEventListener('change', () => applyTheme(sel.value));
+}
+
+function hideLoginScreen() {
+    const screen = document.getElementById('login-screen');
+    screen.classList.add('hidden');
+    screen.innerHTML = '';
+    document.getElementById('app').classList.remove('hidden');
+}
+
+function showLoginError(id, msg) {
+    const el = document.getElementById(id);
+    el.textContent = msg;
+    el.classList.remove('hidden');
+}
+
+async function handleLogin() {
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    if (!username || !password) {
+        showLoginError('login-error', 'Username and password are required.');
+        return;
+    }
+    const submit = document.getElementById('login-submit');
+    submit.disabled = true;
+    submit.textContent = 'Logging in…';
+    try {
+        const resp = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            _authToken = data.token;
+            _currentUser = data.user;
+            localStorage.setItem('mh-token', data.token);
+            hideLoginScreen();
+            startApp();
+        } else {
+            submit.disabled = false;
+            submit.textContent = 'Log In';
+            showLoginError('login-error', data.error || 'Login failed.');
+        }
+    } catch (err) {
+        submit.disabled = false;
+        submit.textContent = 'Log In';
+        showLoginError('login-error', 'Connection error.');
+    }
+}
+
+async function handleSetup() {
+    const username = document.getElementById('setup-username').value.trim();
+    const displayName = document.getElementById('setup-display').value.trim();
+    const password = document.getElementById('setup-password').value;
+    const confirm = document.getElementById('setup-confirm').value;
+    if (!username || !password) {
+        showLoginError('setup-error', 'Username and password are required.');
+        return;
+    }
+    if (password !== confirm) {
+        showLoginError('setup-error', 'Passwords do not match.');
+        return;
+    }
+    const submit = document.getElementById('setup-submit');
+    submit.disabled = true;
+    submit.textContent = 'Creating…';
+    try {
+        const resp = await fetch('/api/auth/setup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password, displayName }),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            _authToken = data.token;
+            _currentUser = data.user;
+            localStorage.setItem('mh-token', data.token);
+            hideLoginScreen();
+            startApp();
+        } else {
+            submit.disabled = false;
+            submit.textContent = 'Create Account';
+            showLoginError('setup-error', data.error || 'Setup failed.');
+        }
+    } catch (err) {
+        submit.disabled = false;
+        submit.textContent = 'Create Account';
+        showLoginError('setup-error', 'Connection error.');
+    }
+}
+
+function startApp() {
+    connectWS();
+    loadServers();
+    loadStats().then(renderGlobalStats);
+    renderSyncStatus(null);
+}
+
 // ── Init ────────────────────────────────────────────────
 
-loadServers();
-loadStats().then(renderGlobalStats);
-renderSyncStatus(null);
+async function init() {
+    try {
+        const resp = await fetch('/api/auth/status');
+        const data = await resp.json();
+        if (data.needsSetup) {
+            showSetupScreen();
+            return;
+        }
+    } catch (err) {
+        console.error('Auth status check failed:', err);
+        return;
+    }
+
+    // Check existing token
+    if (!_authToken) {
+        showLoginScreen();
+        return;
+    }
+
+    // Validate token
+    try {
+        const resp = await apiFetch('/api/auth/me');
+        const data = await resp.json();
+        if (data.ok) {
+            _currentUser = data;
+            hideLoginScreen();
+            startApp();
+        } else {
+            localStorage.removeItem('mh-token');
+            _authToken = null;
+            showLoginScreen();
+        }
+    } catch (err) {
+        localStorage.removeItem('mh-token');
+        _authToken = null;
+        showLoginScreen();
+    }
+}
+
+init();

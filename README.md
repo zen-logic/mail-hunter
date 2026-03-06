@@ -26,6 +26,7 @@ before the next provider shuts down.
 - **Message Preview** -- View HTML (with inline CID images), plain text, and raw RFC822 source. Download the original EML or extract individual attachments.
 - **Search** -- Full-text search across all servers, folders, and years. Filter by sender, recipient, subject, body, date range, attachment filename, tags, duplicate status, or legal hold. Save searches for one-click re-use.
 - **Batch Operations** -- Select multiple messages with click, shift-click, or select-all. Batch delete, batch tag, batch hold, and batch export as zip. Legal hold respected across all bulk operations.
+- **MBOX Export** -- Export any archive folder as a standard MBOX file for migration or backup.
 - **Dashboard** -- Global stats with per-server breakdown of message counts, duplicates, held messages, and storage. Click any server name to navigate directly.
 - **Real-Time UI** -- Three-panel layout with resizable panes. Live sync progress, folder counts, and system status via WebSocket. Keyboard navigation and colour themes.
 - **Encrypted Credentials** -- IMAP passwords encrypted at rest with Fernet symmetric encryption. Key generated on first run, stored in your config.
