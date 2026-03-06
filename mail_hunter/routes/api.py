@@ -58,7 +58,7 @@ def _sort_params(request):
 async def list_servers(request: Request):
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT id, name, host, port, username, last_sync, is_gmail, sync_enabled, sync_interval FROM servers ORDER BY name"
+        "SELECT id, name, host, port, username, last_sync, is_gmail, sync_enabled, sync_interval FROM servers ORDER BY name COLLATE NOCASE"
     )
     servers = []
     for r in rows:
