@@ -17,7 +17,7 @@ def parse_message(raw_bytes: bytes) -> dict:
     def _hdr(name, default=""):
         try:
             return msg.get(name, default)
-        except ValueError:
+        except (ValueError, AttributeError):
             for key, val in msg.raw_items():
                 if key.lower() == name.lower():
                     return re.sub(r"[\r\n]+", " ", val).strip()
