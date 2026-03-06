@@ -337,7 +337,7 @@ function handleWSMessage(msg) {
                 });
             } else {
                 loadServers();
-                if (selectedServerId && !hasSearchParams()) loadMails();
+                if (selectedServerId && !customMailView) loadMails();
             }
             break;
         case 'import_error':
@@ -351,7 +351,7 @@ function handleWSMessage(msg) {
             loadServers();
             if (msg.server_id === selectedServerId) {
                 currentPage = 0;
-                if (fullSyncServerId !== msg.server_id && !hasSearchParams()) loadMails();
+                if (fullSyncServerId !== msg.server_id && !customMailView) loadMails();
                 renderServerDetail();
             }
             break;
@@ -403,7 +403,7 @@ function handleWSMessage(msg) {
             if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
             loadStats().then(() => { if (!selectedServerId) renderGlobalStats(); });
             loadServers().then(() => {
-                if (msg.server_id === selectedServerId && !hasSearchParams()) {
+                if (msg.server_id === selectedServerId && !customMailView) {
                     loadMails();
                     renderServerDetail();
                 }
@@ -416,7 +416,7 @@ function handleWSMessage(msg) {
             if (fullSyncServerId === msg.server_id) fullSyncServerId = null;
             if (_statusBarSyncId === msg.server_id) renderSyncStatus(null);
             loadServers();
-            if (msg.server_id === selectedServerId && !hasSearchParams()) {
+            if (msg.server_id === selectedServerId && !customMailView) {
                 loadMails();
                 renderServerDetail();
             } else if (!selectedServerId) {
@@ -854,6 +854,7 @@ document.getElementById('search-save').addEventListener('click', async () => {
 loadSavedSearches();
 
 async function doSearch() {
+    customMailView = true;
     selectedMailIds.clear();
     _anchorIdx = -1;
     const params = getSearchParams();
@@ -884,6 +885,7 @@ async function doSearch() {
 
 const mailFilter = document.getElementById('mail-filter');
 let currentMails = [];
+let customMailView = false; // true when showing search results, duplicates, thread, etc.
 let sortKey = 'date';
 let sortDir = -1; // 1=asc, -1=desc
 let currentPage = 0;
@@ -1564,6 +1566,7 @@ function renderServers(servers) {
 }
 
 function clearSelection() {
+    customMailView = false;
     selectedServerId = null;
     selectedFolder = null;
     selectedMailId = null;
@@ -1838,6 +1841,7 @@ async function renderServerDetail() {
 
 async function loadMails() {
     if (!selectedServerId) return;
+    customMailView = false;
     selectedMailIds.clear();
     _anchorIdx = -1;
     const container = document.getElementById('mail-content');
@@ -2241,6 +2245,7 @@ function renderDetail(mail) {
             const resp = await fetch(`/api/mails/${mail.id}/duplicates?sort=${sortKey}&sortDir=${sortDirParam()}`);
             if (!resp.ok) return;
             const data = await resp.json();
+            customMailView = true;
             currentMails = data.items;
             totalMails = data.total;
             currentPage = data.page;
@@ -2258,6 +2263,7 @@ function renderDetail(mail) {
             const resp = await fetch(`/api/mails/${mail.id}/thread`);
             if (!resp.ok) return;
             const data = await resp.json();
+            customMailView = true;
             currentMails = data.items;
             totalMails = data.items.length;
             currentPage = 0;
