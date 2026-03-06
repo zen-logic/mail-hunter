@@ -387,6 +387,12 @@ function handleWSMessage(msg) {
                 // Re-render tree so parent roll-ups recalculate
                 renderServers(allServers);
             }
+            // Update global stats in real-time
+            if (msg.mail && _lastStats) {
+                _lastStats.messages++;
+                updateStatsBar();
+                if (!selectedServerId) renderGlobalStats();
+            }
             break;
         }
         case 'sync_completed':
@@ -490,18 +496,23 @@ connectWS();
 
 let _lastStats = null;
 
+function updateStatsBar() {
+    const s = _lastStats;
+    if (!s) return;
+    const el = document.getElementById('status-stats');
+    el.innerHTML =
+        `Servers: <strong>${s.servers.toLocaleString()}</strong> &nbsp; ` +
+        `Messages: <strong>${s.messages.toLocaleString()}</strong> &nbsp; ` +
+        `Duplicates: <strong>${s.duplicates.toLocaleString()}</strong> &nbsp; ` +
+        `Archive: <strong>${formatSize(s.archive_size)}</strong>`;
+}
+
 async function loadStats() {
     try {
         const resp = await fetch('/api/stats');
         if (!resp.ok) return;
-        const s = await resp.json();
-        _lastStats = s;
-        const el = document.getElementById('status-stats');
-        el.innerHTML =
-            `Servers: <strong>${s.servers.toLocaleString()}</strong> &nbsp; ` +
-            `Messages: <strong>${s.messages.toLocaleString()}</strong> &nbsp; ` +
-            `Duplicates: <strong>${s.duplicates.toLocaleString()}</strong> &nbsp; ` +
-            `Archive: <strong>${formatSize(s.archive_size)}</strong>`;
+        _lastStats = await resp.json();
+        updateStatsBar();
     } catch (err) {
         console.error('Failed to load stats:', err);
     }
