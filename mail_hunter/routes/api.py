@@ -940,27 +940,25 @@ async def get_mail_thread(request: Request):
     if not row:
         return JSONResponse({"error": "not found"}, status_code=404)
 
-    def _strip_angles(s):
-        s = s.strip()
-        if s.startswith("<") and s.endswith(">"):
-            return s[1:-1]
-        return s
-
     def _parse_message_ids(text):
+        """Extract message-ids from a header value, keeping angle brackets as stored."""
         if not text:
             return set()
         ids = set()
-        for part in text.split():
-            cleaned = _strip_angles(part)
-            if cleaned:
-                ids.add(cleaned)
+        for match in re.finditer(r"<[^>]+>", text):
+            ids.add(match.group(0))
+        # If no angle-bracket IDs found, treat entire trimmed value as one ID
+        if not ids:
+            text = text.strip()
+            if text:
+                ids.add(text)
         return ids
 
-    # Build initial set of related message-ids
+    # Build initial set of related message-ids (kept in stored form)
     related = set()
     msg_id = row[0]["message_id"]
     if msg_id:
-        related.add(_strip_angles(msg_id))
+        related.add(msg_id.strip())
     related |= _parse_message_ids(row[0]["in_reply_to"])
     related |= _parse_message_ids(row[0]["references_header"])
 
@@ -978,7 +976,7 @@ async def get_mail_thread(request: Request):
         new_ids = set()
         for r in expand_rows:
             if r["message_id"]:
-                new_ids.add(_strip_angles(r["message_id"]))
+                new_ids.add(r["message_id"].strip())
             new_ids |= _parse_message_ids(r["in_reply_to"])
             new_ids |= _parse_message_ids(r["references_header"])
         if new_ids <= related:
