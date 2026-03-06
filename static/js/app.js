@@ -815,14 +815,19 @@ async function loadSavedSearches() {
     }
 }
 
+const _savedSearchParams = {};
+
 function renderSavedSearches(searches) {
     const container = document.getElementById('saved-searches');
     if (!searches.length) {
         container.innerHTML = '';
         return;
     }
+    for (const s of searches) {
+        _savedSearchParams[s.id] = typeof s.params === 'string' ? JSON.parse(s.params) : s.params;
+    }
     container.innerHTML = searches.map(s =>
-        `<span class="saved-search-item" data-id="${s.id}" data-params="${esc(s.params)}">` +
+        `<span class="saved-search-item" data-id="${s.id}">` +
         `<span class="saved-search-name">${esc(s.name)}</span>` +
         `<span class="saved-search-delete" data-id="${s.id}">&times;</span>` +
         `</span>`
@@ -831,7 +836,7 @@ function renderSavedSearches(searches) {
     container.querySelectorAll('.saved-search-name').forEach(el => {
         el.addEventListener('click', () => {
             const item = el.closest('.saved-search-item');
-            const params = JSON.parse(item.dataset.params);
+            const params = _savedSearchParams[item.dataset.id];
             // Populate search fields from saved params
             searchFields.forEach(id => {
                 const field = document.getElementById(id);
