@@ -9,8 +9,19 @@ _fernet = None
 
 
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> dict:
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        config = {
+            "host": "127.0.0.1",
+            "port": 8700,
+            "database": "mail_hunter.db",
+            "archive_path": "archive",
+        }
+        with open(path, "w") as f:
+            json.dump(config, f, indent=2)
+        return config
 
 
 def _load_or_create_key(path: Path = DEFAULT_CONFIG_PATH) -> bytes:
