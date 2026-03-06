@@ -2643,11 +2643,12 @@ function renderDetail(mail) {
 
 function renderMultiSelect() {
     const container = document.getElementById('detail-content');
-    const visible = _getVisibleMails();
-    const selected = visible.filter(m => selectedMailIds.has(m.id));
-    const totalSize = selected.reduce((sum, m) => sum + (m.size || 0), 0);
+    // currentMails is the current page — selectedMailIds may span pages
+    const knownSelected = currentMails.filter(m => selectedMailIds.has(m.id));
+    const totalSize = knownSelected.reduce((sum, m) => sum + (m.size || 0), 0);
+    const unknownCount = selectedMailIds.size - knownSelected.length;
 
-    let listHtml = selected.map(m => {
+    let listHtml = knownSelected.map(m => {
         const from = m.from_name || m.from_addr || '';
         const subject = m.subject || '(no subject)';
         return `<div class="multi-select-item">
@@ -2655,11 +2656,14 @@ function renderMultiSelect() {
             <div class="ms-from">${esc(from)}</div>
         </div>`;
     }).join('');
+    if (unknownCount > 0) {
+        listHtml += `<div class="multi-select-item text-muted">+ ${unknownCount} more on other pages</div>`;
+    }
 
     container.innerHTML = `
         <div class="detail-section">
             <div class="multi-select-header">${selectedMailIds.size} Messages Selected</div>
-            <div class="multi-select-size">${formatSize(totalSize)} total</div>
+            <div class="multi-select-size">${formatSize(totalSize)}${unknownCount > 0 ? ' (this page)' : ' total'}</div>
         </div>
         <div class="detail-section">
             <h3>Batch Actions</h3>
