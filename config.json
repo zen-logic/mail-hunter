@@ -1,7 +1,0 @@
-{
-  "host": "127.0.0.1",
-  "port": 8700,
-  "database": "mail_hunter.db",
-  "archive_path": "archive",
-  "encryption_key": "flDcNtRJmatl-v9yE10oUTBzp4XE13OLsT3JFWjLDCY="
-}
