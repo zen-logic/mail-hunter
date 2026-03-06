@@ -95,6 +95,62 @@ function showPrompt(message, { title = 'Input', okLabel = 'Save', placeholder = 
     });
 }
 
+// ── Folder picker dialog ──────────────────────────────
+
+function showFolderPicker({ title = 'Select Folder' } = {}) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('folder-picker-modal');
+        document.getElementById('folder-picker-title').textContent = title;
+        const list = document.getElementById('folder-picker-list');
+        const closeBtn = document.getElementById('folder-picker-close');
+
+        // Build list from archive servers
+        const archives = allServers.filter(s => s.protocol === 'archive');
+        if (!archives.length || !archives.some(a => a.folders && a.folders.length)) {
+            list.innerHTML = '<div class="folder-picker-empty">No archive folders. Create an archive and add folders first.</div>';
+        } else {
+            let html = '';
+            for (const a of archives) {
+                if (!a.folders || !a.folders.length) continue;
+                html += `<div class="folder-picker-group">`;
+                html += `<div class="folder-picker-group-label">${esc(a.name)}</div>`;
+                for (const f of a.folders) {
+                    html += `<div class="folder-picker-item" data-server-id="${a.id}" data-folder-id="${f.id}" data-folder-name="${esc(f.name)}">${esc(f.name)} <span class="text-muted">(${f.count || 0})</span></div>`;
+                }
+                html += `</div>`;
+            }
+            list.innerHTML = html;
+        }
+
+        modal.classList.remove('hidden');
+
+        function cleanup(result) {
+            modal.classList.add('hidden');
+            closeBtn.removeEventListener('click', onClose);
+            modal.removeEventListener('click', onBackdrop);
+            list.querySelectorAll('.folder-picker-item').forEach(el => {
+                el.removeEventListener('click', el._onPick);
+            });
+            resolve(result);
+        }
+        function onClose() { cleanup(null); }
+        function onBackdrop(e) { if (e.target === modal) cleanup(null); }
+
+        closeBtn.addEventListener('click', onClose);
+        modal.addEventListener('click', onBackdrop);
+
+        list.querySelectorAll('.folder-picker-item').forEach(el => {
+            el._onPick = () => {
+                const serverId = parseInt(el.dataset.serverId);
+                const folderId = parseInt(el.dataset.folderId);
+                const folderName = el.dataset.folderName;
+                cleanup({ server_id: serverId, folder_id: folderId, folder_name: folderName });
+            };
+            el.addEventListener('click', el._onPick);
+        });
+    });
+}
+
 // ── Message preview dialog ─────────────────────────────
 
 function showMessagePreview(mail, bodyText, bodyHtml, rawSource) {
@@ -2320,6 +2376,10 @@ async function selectMail(id) {
     }
 }
 
+function _hasArchiveFolders() {
+    return allServers.some(s => s.protocol === 'archive' && s.folders && s.folders.length > 0);
+}
+
 // ── Detail panel ────────────────────────────────────────
 
 function renderDetail(mail) {
@@ -2384,11 +2444,56 @@ function renderDetail(mail) {
                 ${mail.raw_path ? `<button class="btn" id="btn-export-zip">Export</button>` : ''}
                 ${mail.dup_count > 0 ? `<button class="btn" id="btn-show-dups">Show Duplicates</button>` : ''}
                 ${mail.in_reply_to || mail.references_header ? `<button class="btn" id="btn-show-thread">Show Thread</button>` : ''}
+                ${_hasArchiveFolders() ? `<button class="btn" id="btn-move-to">Move to&hellip;</button>` : ''}
+                ${_hasArchiveFolders() ? `<button class="btn" id="btn-copy-to">Copy to&hellip;</button>` : ''}
                 <button class="btn" id="btn-toggle-hold">${mail.legal_hold ? 'Release Hold' : 'Legal Hold'}</button>
                 <button class="btn btn-danger" id="btn-delete-mail"${mail.legal_hold ? ' disabled title="Message is on legal hold"' : ''}>Delete Message</button>
             </div>
         </div>
     `;
+
+    // Move/Copy handlers
+    document.getElementById('btn-move-to')?.addEventListener('click', async () => {
+        const target = await showFolderPicker({ title: 'Move to...' });
+        if (!target) return;
+        try {
+            const resp = await fetch('/api/mails/batch/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mail_ids: [mail.id], server_id: target.server_id, folder_id: target.folder_id }),
+            });
+            if (!resp.ok) return;
+            const result = await resp.json();
+            ActivityLog.add(`Moved ${result.moved} message to ${target.folder_name}`);
+            currentMails = currentMails.filter(m => m.id !== mail.id);
+            selectedMailId = null;
+            applyFilterAndRender();
+            loadServers();
+            loadStats();
+            renderDetail(null);
+        } catch (err) {
+            console.error('Move failed:', err);
+        }
+    });
+
+    document.getElementById('btn-copy-to')?.addEventListener('click', async () => {
+        const target = await showFolderPicker({ title: 'Copy to...' });
+        if (!target) return;
+        try {
+            const resp = await fetch('/api/mails/batch/copy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mail_ids: [mail.id], server_id: target.server_id, folder_id: target.folder_id }),
+            });
+            if (!resp.ok) return;
+            const result = await resp.json();
+            ActivityLog.add(`Copied ${result.copied} message to ${target.folder_name}`);
+            loadServers();
+            loadStats();
+        } catch (err) {
+            console.error('Copy failed:', err);
+        }
+    });
 
     // Breadcrumb navigation
     container.querySelectorAll('.breadcrumb-link').forEach(el => {
@@ -2587,6 +2692,8 @@ function renderMultiSelect() {
             <h3>Batch Actions</h3>
             <div class="detail-btn-group">
                 <button class="btn" id="btn-batch-export">Export</button>
+                ${_hasArchiveFolders() ? `<button class="btn" id="btn-batch-move">Move to&hellip;</button>` : ''}
+                ${_hasArchiveFolders() ? `<button class="btn" id="btn-batch-copy">Copy to&hellip;</button>` : ''}
                 <button class="btn" id="btn-batch-hold">Legal Hold</button>
                 <button class="btn" id="btn-batch-release">Release Hold</button>
                 <button class="btn btn-danger" id="btn-batch-delete">Delete</button>
@@ -2628,6 +2735,55 @@ function renderMultiSelect() {
     };
     document.getElementById('btn-batch-hold')?.addEventListener('click', () => batchHoldHandler(1));
     document.getElementById('btn-batch-release')?.addEventListener('click', () => batchHoldHandler(0));
+
+    // Batch move
+    document.getElementById('btn-batch-move')?.addEventListener('click', async () => {
+        const target = await showFolderPicker({ title: 'Move to...' });
+        if (!target) return;
+        try {
+            const resp = await fetch('/api/mails/batch/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mail_ids: [...selectedMailIds], server_id: target.server_id, folder_id: target.folder_id }),
+            });
+            if (!resp.ok) return;
+            const result = await resp.json();
+            ActivityLog.add(`Moved ${result.moved} messages to ${target.folder_name}`);
+            selectedMailIds.clear();
+            _anchorIdx = -1;
+            selectedMailId = null;
+            if (hasSearchParams()) {
+                doSearch();
+            } else {
+                loadMails();
+            }
+            loadServers();
+            loadStats();
+            renderDetail(null);
+        } catch (err) {
+            console.error('Batch move failed:', err);
+        }
+    });
+
+    // Batch copy
+    document.getElementById('btn-batch-copy')?.addEventListener('click', async () => {
+        const target = await showFolderPicker({ title: 'Copy to...' });
+        if (!target) return;
+        try {
+            const resp = await fetch('/api/mails/batch/copy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mail_ids: [...selectedMailIds], server_id: target.server_id, folder_id: target.folder_id }),
+            });
+            if (!resp.ok) return;
+            const result = await resp.json();
+            ActivityLog.add(`Copied ${result.copied} messages to ${target.folder_name}`);
+            loadServers();
+            loadStats();
+        } catch (err) {
+            console.error('Batch copy failed:', err);
+        }
+    });
 
     // Batch export
     document.getElementById('btn-batch-export')?.addEventListener('click', async () => {
@@ -2763,7 +2919,7 @@ for (const [key, el] of Object.entries(panelElements)) {
 
 // ── Modal helpers ───────────────────────────────────────
 
-const modalIds = ['prompt-modal', 'preview-modal', 'confirm-modal', 'settings-modal', 'import-modal', 'about-modal'];
+const modalIds = ['folder-picker-modal', 'prompt-modal', 'preview-modal', 'confirm-modal', 'settings-modal', 'import-modal', 'about-modal'];
 
 function getTopmostModal() {
     for (const id of modalIds) {
@@ -2776,7 +2932,9 @@ function getTopmostModal() {
 function closeModal(modal) {
     if (!modal) return;
     const id = modal.id;
-    if (id === 'prompt-modal') {
+    if (id === 'folder-picker-modal') {
+        document.getElementById('folder-picker-close')?.click();
+    } else if (id === 'prompt-modal') {
         document.getElementById('prompt-cancel')?.click();
     } else if (id === 'preview-modal') {
         document.getElementById('preview-close')?.click();

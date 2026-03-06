@@ -1180,6 +1180,49 @@ body {
     justify-content: flex-end;
 }
 
+/* ── Folder picker modal ───────────────────────────── */
+
+.folder-picker-body {
+    padding-top: 0.5rem;
+}
+
+.folder-picker-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.folder-picker-group {
+    margin-bottom: 0.5rem;
+}
+
+.folder-picker-group-label {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-muted);
+    padding: 0.25rem 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.folder-picker-item {
+    padding: 0.35rem 0.5rem 0.35rem 1.5rem;
+    font-size: var(--font-size-sm);
+    color: var(--color-text);
+    cursor: pointer;
+    border-radius: var(--border-radius);
+}
+
+.folder-picker-item:hover {
+    background: var(--color-surface-hover);
+}
+
+.folder-picker-empty {
+    padding: 1rem;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+}
+
 /* ── Settings modal ────────────────────────────────── */
 
 #settings-modal .modal-dialog {

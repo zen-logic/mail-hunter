@@ -76,7 +76,7 @@ async def list_servers(request: Request):
     folders_by_server = {}
     for f in all_folders:
         folders_by_server.setdefault(f["server_id"], []).append(
-            {"name": f["name"], "count": f["count"]}
+            {"id": f["id"], "name": f["name"], "count": f["count"]}
         )
     servers = []
     for r in rows:
