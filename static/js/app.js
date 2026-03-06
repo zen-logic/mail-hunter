@@ -737,6 +737,93 @@ searchFields.forEach(id => {
     });
 });
 
+// ── Saved searches ──────────────────────────────────────
+
+async function loadSavedSearches() {
+    try {
+        const resp = await fetch('/api/searches');
+        if (!resp.ok) return;
+        const searches = await resp.json();
+        renderSavedSearches(searches);
+    } catch (err) {
+        console.error('Failed to load saved searches:', err);
+    }
+}
+
+function renderSavedSearches(searches) {
+    const container = document.getElementById('saved-searches');
+    if (!searches.length) {
+        container.innerHTML = '';
+        return;
+    }
+    container.innerHTML = searches.map(s =>
+        `<span class="saved-search-item" data-id="${s.id}" data-params="${esc(s.params)}">` +
+        `<span class="saved-search-name">${esc(s.name)}</span>` +
+        `<span class="saved-search-delete" data-id="${s.id}">&times;</span>` +
+        `</span>`
+    ).join('');
+
+    container.querySelectorAll('.saved-search-name').forEach(el => {
+        el.addEventListener('click', () => {
+            const item = el.closest('.saved-search-item');
+            const params = JSON.parse(item.dataset.params);
+            // Populate search fields from saved params
+            searchFields.forEach(id => {
+                const field = document.getElementById(id);
+                if (field.type === 'checkbox') field.checked = false;
+                else field.value = '';
+            });
+            if (params.from) document.getElementById('search-from').value = params.from;
+            if (params.to) document.getElementById('search-to').value = params.to;
+            if (params.subject) document.getElementById('search-subject').value = params.subject;
+            if (params.body) document.getElementById('search-body').value = params.body;
+            if (params.date_from) document.getElementById('search-date-from').value = params.date_from;
+            if (params.date_to) document.getElementById('search-date-to').value = params.date_to;
+            if (params.attachment) document.getElementById('search-attachment').value = params.attachment;
+            if (params.tag) document.getElementById('search-tag').value = params.tag;
+            if (params.held) document.getElementById('search-held').checked = true;
+            if (params.has_dups) document.getElementById('search-has-dups').checked = true;
+            if (params.server_id) document.getElementById('search-server').value = params.server_id;
+            // Show search panel and run
+            searchPanel.classList.remove('hidden');
+            searchToggleBtn.classList.add('btn-active');
+            currentPage = 0;
+            doSearch();
+        });
+    });
+
+    container.querySelectorAll('.saved-search-delete').forEach(el => {
+        el.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            try {
+                await fetch(`/api/searches/${el.dataset.id}`, { method: 'DELETE' });
+                loadSavedSearches();
+            } catch (err) {
+                console.error('Failed to delete saved search:', err);
+            }
+        });
+    });
+}
+
+document.getElementById('search-save').addEventListener('click', async () => {
+    const params = getSearchParams();
+    if (!Object.keys(params).length) return;
+    const name = prompt('Save search as:');
+    if (!name) return;
+    try {
+        await fetch('/api/searches', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, params }),
+        });
+        loadSavedSearches();
+    } catch (err) {
+        console.error('Failed to save search:', err);
+    }
+});
+
+loadSavedSearches();
+
 async function doSearch() {
     selectedMailIds.clear();
     _anchorIdx = -1;

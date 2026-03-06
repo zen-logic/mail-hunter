@@ -3,6 +3,7 @@ import base64
 import email
 import email.policy
 import io
+import json
 import logging
 import re
 import zipfile
@@ -877,6 +878,40 @@ async def toggle_hold(request: Request):
 
 async def get_version(request: Request):
     return JSONResponse({"version": __version__})
+
+
+async def list_saved_searches(request: Request):
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT id, name, params, created_at FROM saved_searches ORDER BY created_at DESC"
+    )
+    return JSONResponse([dict(r) for r in rows])
+
+
+async def create_saved_search(request: Request):
+    data = await request.json()
+    name = data.get("name", "").strip()
+    params = data.get("params")
+    if not name or not params:
+        return JSONResponse({"error": "name and params required"}, status_code=400)
+
+    request_write_lock()
+    db = await get_db()
+    cursor = await db.execute(
+        "INSERT INTO saved_searches (name, params) VALUES (?, ?)",
+        (name, json.dumps(params) if isinstance(params, dict) else str(params)),
+    )
+    await db.commit()
+    return JSONResponse({"id": cursor.lastrowid}, status_code=201)
+
+
+async def delete_saved_search(request: Request):
+    search_id = request.path_params["search_id"]
+    request_write_lock()
+    db = await get_db()
+    await db.execute("DELETE FROM saved_searches WHERE id = ?", (search_id,))
+    await db.commit()
+    return JSONResponse({"ok": True})
 
 
 async def get_mail_duplicates(request: Request):

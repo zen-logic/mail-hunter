@@ -34,6 +34,9 @@ from mail_hunter.routes.api import (
     get_stats,
     get_version,
     get_mail_duplicates,
+    list_saved_searches,
+    create_saved_search,
+    delete_saved_search,
 )
 from mail_hunter.routes.import_mail import import_upload
 from mail_hunter.routes.sync import (
@@ -196,6 +199,10 @@ routes = [
     Route("/api/mails/{mail_id:int}/hold", toggle_hold, methods=["PUT"]),
     Route("/api/mails/{mail_id:int}/tags", add_tag, methods=["POST"]),
     Route("/api/mails/{mail_id:int}/tags/{tag:str}", remove_tag, methods=["DELETE"]),
+    # Saved searches
+    Route("/api/searches", list_saved_searches, methods=["GET"]),
+    Route("/api/searches", create_saved_search, methods=["POST"]),
+    Route("/api/searches/{search_id:int}", delete_saved_search, methods=["DELETE"]),
     # Stats / version
     Route("/api/stats", get_stats, methods=["GET"]),
     Route("/api/version", get_version, methods=["GET"]),
