@@ -461,7 +461,9 @@ function handleWSMessage(msg) {
             let logDetail = statusText;
             if (msg.total) {
                 const existing = msg.existing_count || 0;
-                statusText += ` — ${msg.count} of ${msg.total} [new] ${existing} [existing]`;
+                const imported = msg.imported || 0;
+                const skipped = msg.skipped || 0;
+                statusText += ` — ${msg.count} of ${msg.total} [new] ${imported} [imported] ${skipped} [skipped] ${existing} [existing]`;
                 logDetail = `Sync: ${msg.folder} — ${msg.count} of ${msg.total} new`;
             }
             renderSyncStatus(statusText, msg.server_id);

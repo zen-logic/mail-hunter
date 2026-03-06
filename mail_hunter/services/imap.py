@@ -676,6 +676,8 @@ async def sync_server(
                         "total": len(new_uids),
                         "existing_count": existing_count,
                         "folder_count": folder_count,
+                        "imported": imported,
+                        "skipped": skipped,
                     }
                     if mail_data:
                         msg_out["mail"] = mail_data
