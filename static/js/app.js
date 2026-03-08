@@ -887,6 +887,7 @@ document.getElementById('search-clear').addEventListener('click', () => {
     searchFields.forEach(id => {
         const el = document.getElementById(id);
         if (el.type === 'checkbox') el.checked = false;
+        else if (el.type === 'date') el.valueAsDate = null;
         else el.value = '';
     });
     document.getElementById('mail-filter').value = '';

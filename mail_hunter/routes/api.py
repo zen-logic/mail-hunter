@@ -378,6 +378,11 @@ async def search_mails(request: Request):
     has_dups = request.query_params.get("has_dups", "").strip()
     attachment_q = request.query_params.get("attachment", "").strip()
 
+    logger.info(
+        "search_mails: date_from=%r, date_to=%r, from=%r, to=%r, subject=%r, body=%r",
+        date_from, date_to, from_q, to_q, subject_q, body_q,
+    )
+
     if not any([from_q, to_q, subject_q, body_q, date_from, date_to, tag_q, held_q, has_dups, attachment_q]):
         return JSONResponse({"items": [], "total": 0, "page": 0, "pageSize": PAGE_SIZE})
 
