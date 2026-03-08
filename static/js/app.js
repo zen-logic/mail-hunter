@@ -879,8 +879,33 @@ function hasSearchParams() {
     return p.from || p.to || p.subject || p.body || p.date_from || p.date_to || p.attachment || p.tag || p.held || p.has_dups;
 }
 
+function validateSearchDates() {
+    const errEl = document.getElementById('search-error');
+    const fromEl = document.getElementById('search-date-from');
+    const toEl = document.getElementById('search-date-to');
+    errEl.classList.add('hidden');
+    errEl.textContent = '';
+    // If the input has user-visible text but .value is empty, the date is invalid
+    if (!fromEl.validity.valid) {
+        errEl.textContent = 'Start date is not a valid date.';
+        errEl.classList.remove('hidden');
+        return false;
+    }
+    if (!toEl.validity.valid) {
+        errEl.textContent = 'End date is not a valid date.';
+        errEl.classList.remove('hidden');
+        return false;
+    }
+    if (fromEl.value && toEl.value && fromEl.value > toEl.value) {
+        errEl.textContent = 'Start date must be before end date.';
+        errEl.classList.remove('hidden');
+        return false;
+    }
+    return true;
+}
+
 document.getElementById('search-go').addEventListener('click', () => {
-    if (hasSearchParams()) { currentPage = 0; doSearch(); }
+    if (hasSearchParams() && validateSearchDates()) { currentPage = 0; doSearch(); }
 });
 
 document.getElementById('search-clear').addEventListener('click', () => {
@@ -890,6 +915,7 @@ document.getElementById('search-clear').addEventListener('click', () => {
         else if (el.type === 'date') el.valueAsDate = null;
         else el.value = '';
     });
+    document.getElementById('search-error').classList.add('hidden');
     document.getElementById('mail-filter').value = '';
     currentPage = 0;
     if (selectedServerId) loadMails();
@@ -898,7 +924,7 @@ document.getElementById('search-clear').addEventListener('click', () => {
 // Enter in any search field triggers search
 searchFields.forEach(id => {
     document.getElementById(id).addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && hasSearchParams()) { currentPage = 0; doSearch(); }
+        if (e.key === 'Enter' && hasSearchParams() && validateSearchDates()) { currentPage = 0; doSearch(); }
     });
 });
 

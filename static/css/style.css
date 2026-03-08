@@ -1069,6 +1069,13 @@ body::after {
     flex-shrink: 0;
 }
 
+.search-error {
+    color: var(--color-status-error);
+    font-size: var(--font-size-sm);
+    margin: 0.3rem 0 0 0;
+    padding: 0 0.5rem;
+}
+
 .search-separator {
     color: var(--color-text-muted);
 }
