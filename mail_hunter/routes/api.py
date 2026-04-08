@@ -364,7 +364,116 @@ async def _delete_folder_task(
         await conn.close()
 
 
+def _parse_mail_conditions(query_params):
+    """Parse indexed condition params (c0_field, c0_op, c0_value, etc.)."""
+    conditions = []
+    i = 0
+    while True:
+        field = query_params.get(f"c{i}_field")
+        if field is None:
+            break
+        cond = {
+            "field": field,
+            "op": query_params.get(f"c{i}_op", "include"),
+        }
+        if field == "date":
+            cond["from"] = query_params.get(f"c{i}_from", "")
+            cond["to"] = query_params.get(f"c{i}_to", "")
+        else:
+            cond["value"] = query_params.get(f"c{i}_value", "")
+        conditions.append(cond)
+        i += 1
+    return conditions
+
+
+def _build_mail_condition_sql(cond):
+    """Build (sql_fragment, params_list) for a single advanced condition.
+
+    Returns (None, []) if the condition is empty/no-op.
+    """
+    field = cond["field"]
+    value = cond.get("value", "")
+
+    if field == "from":
+        if not value:
+            return None, []
+        pattern = f"%{value}%"
+        return "(from_name LIKE ? OR from_addr LIKE ?)", [pattern, pattern]
+
+    elif field == "to":
+        if not value:
+            return None, []
+        return "to_addr LIKE ?", [f"%{value}%"]
+
+    elif field == "subject":
+        if not value:
+            return None, []
+        return "subject LIKE ?", [f"%{value}%"]
+
+    elif field == "body":
+        if not value:
+            return None, []
+        return "body_text LIKE ?", [f"%{value}%"]
+
+    elif field == "date":
+        date_from = cond.get("from", "")
+        date_to = cond.get("to", "")
+        if not date_from and not date_to:
+            return None, []
+        frags = []
+        params = []
+        if date_from:
+            frags.append("date >= ?")
+            params.append(date_from)
+        if date_to:
+            frags.append("date <= ?")
+            params.append(date_to + "T23:59:59")
+        return "(" + " AND ".join(frags) + ")", params
+
+    elif field == "attachment":
+        if not value:
+            return None, []
+        return (
+            "EXISTS (SELECT 1 FROM attachments a WHERE a.mail_id = mails.id AND a.filename LIKE ?)",
+            [f"%{value}%"],
+        )
+
+    elif field == "tag":
+        if not value:
+            return None, []
+        tag_list = [t.strip() for t in value.split(",") if t.strip()]
+        if not tag_list:
+            return None, []
+        frags = []
+        params = []
+        for tag in tag_list:
+            frags.append(
+                "EXISTS (SELECT 1 FROM tags t WHERE t.mail_id = mails.id AND t.tag LIKE ?)"
+            )
+            params.append(tag)
+        return "(" + " AND ".join(frags) + ")", params
+
+    elif field == "server":
+        if not value:
+            return None, []
+        return "server_id = ?", [value]
+
+    elif field == "held":
+        return "legal_hold = 1", []
+
+    elif field == "has_dups":
+        return "dup_count > 0", []
+
+    return None, []
+
+
 async def search_mails(request: Request):
+    if request.query_params.get("mode") == "advanced":
+        return await _search_mails_advanced(request)
+    return await _search_mails_basic(request)
+
+
+async def _search_mails_basic(request: Request):
     server_id = request.query_params.get("server_id")
     from_q = request.query_params.get("from", "").strip()
     to_q = request.query_params.get("to", "").strip()
@@ -460,6 +569,60 @@ async def search_mails(request: Request):
         f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
         f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
         params,
+    )
+
+    return JSONResponse(
+        {
+            "items": [dict(r) for r in rows],
+            "total": total,
+            "page": page,
+            "pageSize": PAGE_SIZE,
+        }
+    )
+
+
+async def _search_mails_advanced(request: Request):
+    parsed = _parse_mail_conditions(request.query_params)
+
+    where_parts = []
+    where_params = []
+
+    for cond in parsed:
+        frag, cparams = _build_mail_condition_sql(cond)
+        if frag is None:
+            continue
+        if cond["op"] == "exclude":
+            where_parts.append(f"NOT ({frag})")
+        else:
+            where_parts.append(f"({frag})")
+        where_params.extend(cparams)
+
+    if not where_parts:
+        return JSONResponse({"items": [], "total": 0, "page": 0, "pageSize": PAGE_SIZE})
+
+    where = " AND ".join(where_parts)
+
+    db = await get_db()
+
+    ids_only = request.query_params.get("ids_only", "").strip()
+    if ids_only:
+        rows = await db.execute_fetchall(
+            f"SELECT id FROM mails WHERE {where}", where_params
+        )
+        return JSONResponse({"ids": [r["id"] for r in rows]})
+
+    sort_col, _sort_col_m, sort_dir, page = _sort_params(request)
+
+    count_row = await db.execute_fetchall(
+        f"SELECT COUNT(*) as cnt FROM mails WHERE {where}", where_params
+    )
+    total = count_row[0]["cnt"] if count_row else 0
+
+    rows = await db.execute_fetchall(
+        "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count, legal_hold, dup_count "
+        f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
+        f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
+        where_params,
     )
 
     return JSONResponse(

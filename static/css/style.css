@@ -1127,6 +1127,34 @@ body::after {
     opacity: 1;
 }
 
+/* ── Search mode toggle & advanced ──────────────────── */
+
+#search-basic,
+#search-advanced {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+#search-basic.hidden,
+#search-advanced.hidden {
+    display: none;
+}
+
+.search-mode-toggle { text-align: right; }
+.search-mode-toggle a { font-size: var(--font-size-sm); color: var(--color-primary); cursor: pointer; }
+
+.search-condition-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; }
+.search-condition-row .search-input,
+.search-condition-row .search-select { min-width: 0; }
+.search-condition-op { font-size: var(--font-size-sm); font-weight: bold; width: 1.5rem; text-align: center; flex-shrink: 0; }
+.search-condition-op.include { color: var(--color-status-ok); }
+.search-condition-op.exclude { color: var(--color-status-error); }
+.search-condition-remove { background: none; border: none; color: var(--color-text-muted); cursor: pointer; padding: 0 0.3rem; font-size: 1rem; flex-shrink: 0; }
+.search-condition-remove:hover { color: var(--color-status-error); }
+.search-condition-inputs { display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0; }
+.search-add-btns { display: flex; gap: 0.5rem; }
+
 /* ── Confirm dialog ────────────────────────────────── */
 
 .modal-dialog-sm {

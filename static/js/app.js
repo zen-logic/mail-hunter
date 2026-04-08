@@ -840,14 +840,39 @@ const searchPanel = document.getElementById('search-panel');
 const searchToggleBtn = document.getElementById('btn-search');
 const searchFields = ['search-from', 'search-to', 'search-subject', 'search-body', 'search-date-from', 'search-date-to', 'search-attachment', 'search-tag', 'search-held', 'search-has-dups', 'search-server'];
 
+// Advanced search state
+const ADV_FIELD_OPTIONS = [
+    { value: 'from', label: 'From' },
+    { value: 'to', label: 'To' },
+    { value: 'subject', label: 'Subject' },
+    { value: 'body', label: 'Body' },
+    { value: 'date', label: 'Date' },
+    { value: 'attachment', label: 'Attachment' },
+    { value: 'tag', label: 'Tag' },
+    { value: 'server', label: 'Server' },
+    { value: 'held', label: 'Legal hold' },
+    { value: 'has_dups', label: 'Has duplicates' },
+];
+
+let searchMode = 'basic';
+let advConditions = [];
+let advNextCondId = 0;
+
 searchToggleBtn.addEventListener('click', () => {
     const visible = !searchPanel.classList.contains('hidden');
     searchPanel.classList.toggle('hidden', visible);
     searchToggleBtn.classList.toggle('btn-active', !visible);
-    if (!visible) document.getElementById('search-from').focus();
+    if (!visible) {
+        if (searchMode === 'advanced') {
+            const firstInput = document.querySelector('#search-conditions input');
+            if (firstInput) firstInput.focus();
+        } else {
+            document.getElementById('search-from').focus();
+        }
+    }
 });
 
-function getSearchParams() {
+function getBasicSearchParams() {
     const params = {};
     const from = document.getElementById('search-from').value.trim();
     const to = document.getElementById('search-to').value.trim();
@@ -874,8 +899,14 @@ function getSearchParams() {
     return params;
 }
 
+function getSearchParams() {
+    if (searchMode === 'advanced') return getAdvancedSearchParams();
+    return getBasicSearchParams();
+}
+
 function hasSearchParams() {
-    const p = getSearchParams();
+    if (searchMode === 'advanced') return hasAdvancedFilters();
+    const p = getBasicSearchParams();
     return p.from || p.to || p.subject || p.body || p.date_from || p.date_to || p.attachment || p.tag || p.held || p.has_dups;
 }
 
@@ -903,6 +934,267 @@ function validateSearchDates() {
     }
     return true;
 }
+
+// ── Advanced search ─────────────────────────────────────
+
+function initAdvancedSearch() {
+    const modeLink = document.getElementById('search-mode-link');
+    modeLink.addEventListener('click', () => toggleSearchMode());
+    document.getElementById('search-add-include').addEventListener('click', () => addAdvCondition('include'));
+    document.getElementById('search-add-exclude').addEventListener('click', () => addAdvCondition('exclude'));
+    document.getElementById('search-adv-go').addEventListener('click', () => {
+        if (hasAdvancedFilters()) { currentPage = 0; doSearch(); }
+    });
+    document.getElementById('search-adv-clear').addEventListener('click', () => {
+        clearAdvanced();
+        document.getElementById('search-error').classList.add('hidden');
+        document.getElementById('mail-filter').value = '';
+        currentPage = 0;
+        if (selectedServerId) loadMails();
+    });
+
+    // Restore mode from localStorage
+    const saved = localStorage.getItem('mh-search-mode');
+    if (saved === 'advanced') {
+        searchMode = 'advanced';
+        document.getElementById('search-basic').classList.add('hidden');
+        document.getElementById('search-advanced').classList.remove('hidden');
+        modeLink.textContent = 'Basic';
+        addAdvCondition('include');
+    }
+}
+
+function toggleSearchMode() {
+    const modeLink = document.getElementById('search-mode-link');
+    if (searchMode === 'basic') {
+        searchMode = 'advanced';
+        document.getElementById('search-basic').classList.add('hidden');
+        document.getElementById('search-advanced').classList.remove('hidden');
+        modeLink.textContent = 'Basic';
+        if (advConditions.length === 0) addAdvCondition('include');
+        const firstInput = document.querySelector('#search-conditions input');
+        if (firstInput) firstInput.focus();
+    } else {
+        searchMode = 'basic';
+        document.getElementById('search-basic').classList.remove('hidden');
+        document.getElementById('search-advanced').classList.add('hidden');
+        modeLink.textContent = 'Advanced';
+        document.getElementById('search-from').focus();
+    }
+    localStorage.setItem('mh-search-mode', searchMode);
+}
+
+function addAdvCondition(op) {
+    const id = advNextCondId++;
+    const container = document.getElementById('search-conditions');
+    const row = document.createElement('div');
+    row.className = 'search-condition-row';
+    row.dataset.condId = id;
+
+    // Op badge
+    const opEl = document.createElement('span');
+    opEl.className = `search-condition-op ${op}`;
+    opEl.textContent = op === 'include' ? '+' : '\u2212';
+    row.appendChild(opEl);
+
+    // Field dropdown
+    const fieldSel = document.createElement('select');
+    fieldSel.className = 'search-select';
+    for (const opt of ADV_FIELD_OPTIONS) {
+        const o = document.createElement('option');
+        o.value = opt.value;
+        o.textContent = opt.label;
+        fieldSel.appendChild(o);
+    }
+    row.appendChild(fieldSel);
+
+    // Input area
+    const inputsDiv = document.createElement('div');
+    inputsDiv.className = 'search-condition-inputs';
+    row.appendChild(inputsDiv);
+
+    // Remove button
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'search-condition-remove';
+    removeBtn.textContent = '\u00d7';
+    removeBtn.title = 'Remove';
+    removeBtn.addEventListener('click', () => removeAdvCondition(id));
+    row.appendChild(removeBtn);
+
+    container.appendChild(row);
+
+    const cond = { id, op, field: 'from' };
+    advConditions.push(cond);
+
+    // Render initial inputs (from)
+    renderConditionInputs(inputsDiv, 'from');
+
+    // Field change handler
+    fieldSel.addEventListener('change', () => {
+        cond.field = fieldSel.value;
+        renderConditionInputs(inputsDiv, fieldSel.value);
+    });
+
+    updateAdvRemoveButtons();
+    return cond;
+}
+
+function removeAdvCondition(id) {
+    if (advConditions.length <= 1) return;
+    advConditions = advConditions.filter(c => c.id !== id);
+    const row = document.querySelector(`.search-condition-row[data-cond-id="${id}"]`);
+    if (row) row.remove();
+    updateAdvRemoveButtons();
+}
+
+function updateAdvRemoveButtons() {
+    const rows = document.querySelectorAll('.search-condition-row');
+    rows.forEach(row => {
+        const btn = row.querySelector('.search-condition-remove');
+        if (btn) btn.style.visibility = advConditions.length <= 1 ? 'hidden' : 'visible';
+    });
+}
+
+function renderConditionInputs(container, field) {
+    container.innerHTML = '';
+    const bind = () => {
+        container.querySelectorAll('input, select').forEach(el => {
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && hasAdvancedFilters()) { currentPage = 0; doSearch(); }
+            });
+        });
+    };
+
+    switch (field) {
+        case 'from':
+        case 'to':
+        case 'subject':
+        case 'body':
+        case 'attachment':
+        case 'tag': {
+            const placeholders = {
+                from: 'Sender name or address...',
+                to: 'Recipient...',
+                subject: 'Subject...',
+                body: 'Message text...',
+                attachment: 'Attachment filename...',
+                tag: 'tag1, tag2...',
+            };
+            const inp = document.createElement('input');
+            inp.type = 'text';
+            inp.className = 'search-input';
+            inp.placeholder = placeholders[field] || '';
+            inp.dataset.role = 'value';
+            container.appendChild(inp);
+            bind();
+            inp.focus();
+            break;
+        }
+        case 'date': {
+            const from = document.createElement('input');
+            from.type = 'date';
+            from.className = 'search-input search-input-sm';
+            from.dataset.role = 'from';
+            container.appendChild(from);
+
+            const sep = document.createElement('span');
+            sep.className = 'search-separator';
+            sep.innerHTML = '&ndash;';
+            container.appendChild(sep);
+
+            const to = document.createElement('input');
+            to.type = 'date';
+            to.className = 'search-input search-input-sm';
+            to.dataset.role = 'to';
+            container.appendChild(to);
+            bind();
+            from.focus();
+            break;
+        }
+        case 'server': {
+            const sel = document.createElement('select');
+            sel.className = 'search-select';
+            sel.dataset.role = 'value';
+            const defOpt = document.createElement('option');
+            defOpt.value = '';
+            defOpt.textContent = 'All servers';
+            sel.appendChild(defOpt);
+            for (const s of allServers) {
+                const o = document.createElement('option');
+                o.value = s.id;
+                o.textContent = s.name;
+                sel.appendChild(o);
+            }
+            container.appendChild(sel);
+            bind();
+            break;
+        }
+        case 'held':
+        case 'has_dups': {
+            // Boolean fields — no additional input needed, the include/exclude op carries the meaning
+            const hint = document.createElement('span');
+            hint.className = 'text-muted';
+            hint.style.fontSize = 'var(--font-size-sm)';
+            hint.textContent = field === 'held' ? 'On legal hold' : 'Has duplicate messages';
+            container.appendChild(hint);
+            break;
+        }
+    }
+}
+
+function readAdvConditionValues() {
+    const result = [];
+    for (const cond of advConditions) {
+        const row = document.querySelector(`.search-condition-row[data-cond-id="${cond.id}"]`);
+        if (!row) continue;
+        const fieldSel = row.querySelector('select.search-select');
+        const field = fieldSel ? fieldSel.value : cond.field;
+        const inputs = row.querySelector('.search-condition-inputs');
+        const entry = { op: cond.op, field };
+
+        switch (field) {
+            case 'date': {
+                entry.from = (inputs.querySelector('[data-role="from"]')?.value || '').trim();
+                entry.to = (inputs.querySelector('[data-role="to"]')?.value || '').trim();
+                break;
+            }
+            case 'held':
+            case 'has_dups': {
+                entry.value = '1';
+                break;
+            }
+            default: {
+                const valEl = inputs.querySelector('[data-role="value"]');
+                entry.value = valEl ? valEl.value.trim() : '';
+                break;
+            }
+        }
+        result.push(entry);
+    }
+    return result;
+}
+
+function hasAdvancedFilters() {
+    const conds = readAdvConditionValues();
+    return conds.some(c => {
+        if (c.field === 'date') return c.from || c.to;
+        if (c.field === 'held' || c.field === 'has_dups') return true;
+        return c.value;
+    });
+}
+
+function getAdvancedSearchParams() {
+    return { mode: 'advanced', conditions: readAdvConditionValues() };
+}
+
+function clearAdvanced() {
+    document.getElementById('search-conditions').innerHTML = '';
+    advConditions = [];
+    advNextCondId = 0;
+    addAdvCondition('include');
+}
+
+initAdvancedSearch();
 
 document.getElementById('search-go').addEventListener('click', () => {
     if (hasSearchParams() && validateSearchDates()) { currentPage = 0; doSearch(); }
@@ -963,23 +1255,55 @@ function renderSavedSearches(searches) {
         el.addEventListener('click', () => {
             const item = el.closest('.saved-search-item');
             const params = _savedSearchParams[item.dataset.id];
-            // Populate search fields from saved params
-            searchFields.forEach(id => {
-                const field = document.getElementById(id);
-                if (field.type === 'checkbox') field.checked = false;
-                else field.value = '';
-            });
-            if (params.from) document.getElementById('search-from').value = params.from;
-            if (params.to) document.getElementById('search-to').value = params.to;
-            if (params.subject) document.getElementById('search-subject').value = params.subject;
-            if (params.body) document.getElementById('search-body').value = params.body;
-            if (params.date_from) document.getElementById('search-date-from').value = params.date_from;
-            if (params.date_to) document.getElementById('search-date-to').value = params.date_to;
-            if (params.attachment) document.getElementById('search-attachment').value = params.attachment;
-            if (params.tag) document.getElementById('search-tag').value = params.tag;
-            if (params.held) document.getElementById('search-held').checked = true;
-            if (params.has_dups) document.getElementById('search-has-dups').checked = true;
-            if (params.server_id) document.getElementById('search-server').value = params.server_id;
+            if (params.mode === 'advanced') {
+                // Switch to advanced mode if not already
+                if (searchMode !== 'advanced') toggleSearchMode();
+                clearAdvanced();
+                if (params.conditions && params.conditions.length) {
+                    // Remove the default condition added by clearAdvanced
+                    document.getElementById('search-conditions').innerHTML = '';
+                    advConditions = [];
+                    advNextCondId = 0;
+                    for (const c of params.conditions) {
+                        const cond = addAdvCondition(c.op || 'include');
+                        const row = document.querySelector(`.search-condition-row[data-cond-id="${cond.id}"]`);
+                        const fieldSel = row.querySelector('select.search-select');
+                        fieldSel.value = c.field;
+                        cond.field = c.field;
+                        const inputsDiv = row.querySelector('.search-condition-inputs');
+                        renderConditionInputs(inputsDiv, c.field);
+                        // Set values
+                        if (c.field === 'date') {
+                            const fromEl = inputsDiv.querySelector('[data-role="from"]');
+                            const toEl = inputsDiv.querySelector('[data-role="to"]');
+                            if (fromEl && c.from) fromEl.value = c.from;
+                            if (toEl && c.to) toEl.value = c.to;
+                        } else if (c.field !== 'held' && c.field !== 'has_dups') {
+                            const valEl = inputsDiv.querySelector('[data-role="value"]');
+                            if (valEl && c.value) valEl.value = c.value;
+                        }
+                    }
+                }
+            } else {
+                // Switch to basic mode if not already
+                if (searchMode !== 'basic') toggleSearchMode();
+                searchFields.forEach(id => {
+                    const field = document.getElementById(id);
+                    if (field.type === 'checkbox') field.checked = false;
+                    else field.value = '';
+                });
+                if (params.from) document.getElementById('search-from').value = params.from;
+                if (params.to) document.getElementById('search-to').value = params.to;
+                if (params.subject) document.getElementById('search-subject').value = params.subject;
+                if (params.body) document.getElementById('search-body').value = params.body;
+                if (params.date_from) document.getElementById('search-date-from').value = params.date_from;
+                if (params.date_to) document.getElementById('search-date-to').value = params.date_to;
+                if (params.attachment) document.getElementById('search-attachment').value = params.attachment;
+                if (params.tag) document.getElementById('search-tag').value = params.tag;
+                if (params.held) document.getElementById('search-held').checked = true;
+                if (params.has_dups) document.getElementById('search-has-dups').checked = true;
+                if (params.server_id) document.getElementById('search-server').value = params.server_id;
+            }
             // Show search panel and run
             searchPanel.classList.remove('hidden');
             searchToggleBtn.classList.add('btn-active');
@@ -1001,9 +1325,9 @@ function renderSavedSearches(searches) {
     });
 }
 
-document.getElementById('search-save').addEventListener('click', async () => {
+async function saveCurrentSearch() {
+    if (!hasSearchParams()) return;
     const params = getSearchParams();
-    if (!Object.keys(params).length) return;
     const name = await showPrompt('Save search as:', { title: 'Save Search', placeholder: 'Search name...' });
     if (!name) return;
     try {
@@ -1016,7 +1340,10 @@ document.getElementById('search-save').addEventListener('click', async () => {
     } catch (err) {
         console.error('Failed to save search:', err);
     }
-});
+}
+
+document.getElementById('search-save').addEventListener('click', saveCurrentSearch);
+document.getElementById('search-adv-save').addEventListener('click', saveCurrentSearch);
 
 loadSavedSearches();
 
@@ -1025,16 +1352,33 @@ async function doSearch() {
     selectedMailIds.clear();
     _anchorIdx = -1;
     const params = getSearchParams();
-    lastSearchParams = { ...params };
-    params.sort = sortKey;
-    params.sortDir = sortDirParam();
-    params.page = currentPage;
+    const qp = {};
+    if (params.mode === 'advanced') {
+        qp.mode = 'advanced';
+        params.conditions.forEach((c, i) => {
+            qp[`c${i}_field`] = c.field;
+            qp[`c${i}_op`] = c.op;
+            if (c.field === 'date') {
+                if (c.from) qp[`c${i}_from`] = c.from;
+                if (c.to) qp[`c${i}_to`] = c.to;
+            } else {
+                if (c.value) qp[`c${i}_value`] = c.value;
+            }
+        });
+    } else {
+        Object.assign(qp, params);
+    }
+    // Store flat query params so _fetchAllIds can reuse them with URLSearchParams
+    lastSearchParams = { ...qp };
+    qp.sort = sortKey;
+    qp.sortDir = sortDirParam();
+    qp.page = currentPage;
     const container = document.getElementById('mail-content');
     const countEl = document.getElementById('mail-count');
     const titleEl = document.getElementById('mail-panel-title');
     container.innerHTML = '<div class="empty-state"><div class="spinner"></div></div>';
     try {
-        const qs = new URLSearchParams(params).toString();
+        const qs = new URLSearchParams(qp).toString();
         const resp = await apiFetch(`/api/mails/search?${qs}`);
         if (!resp.ok) return;
         const data = await resp.json();
@@ -2613,22 +2957,50 @@ function renderSearchDetail() {
     const container = document.getElementById('detail-content');
     const params = getSearchParams();
     const lines = [];
-    if (params.from) lines.push(`<tr><td class="detail-label">From</td><td>${esc(params.from)}</td></tr>`);
-    if (params.to) lines.push(`<tr><td class="detail-label">To</td><td>${esc(params.to)}</td></tr>`);
-    if (params.subject) lines.push(`<tr><td class="detail-label">Subject</td><td>${esc(params.subject)}</td></tr>`);
-    if (params.body) lines.push(`<tr><td class="detail-label">Body</td><td>${esc(params.body)}</td></tr>`);
-    if (params.date_from || params.date_to) {
-        const range = [params.date_from || '...', params.date_to || '...'].join(' \u2013 ');
-        lines.push(`<tr><td class="detail-label">Date</td><td>${esc(range)}</td></tr>`);
+
+    if (params.mode === 'advanced') {
+        const fieldLabels = {};
+        for (const opt of ADV_FIELD_OPTIONS) fieldLabels[opt.value] = opt.label;
+
+        for (const c of (params.conditions || [])) {
+            const label = fieldLabels[c.field] || c.field;
+            const prefix = c.op === 'exclude' ? '&minus; ' : '+ ';
+            let display = '';
+            if (c.field === 'date') {
+                display = [c.from || '...', c.to || '...'].join(' \u2013 ');
+            } else if (c.field === 'held') {
+                display = 'On legal hold';
+            } else if (c.field === 'has_dups') {
+                display = 'Has duplicates';
+            } else if (c.field === 'server' && c.value) {
+                const srv = allServers.find(s => String(s.id) === String(c.value));
+                display = srv ? srv.name : c.value;
+            } else {
+                display = c.value || '';
+            }
+            if (display) {
+                lines.push(`<tr><td class="detail-label">${prefix}${esc(label)}</td><td>${esc(display)}</td></tr>`);
+            }
+        }
+    } else {
+        if (params.from) lines.push(`<tr><td class="detail-label">From</td><td>${esc(params.from)}</td></tr>`);
+        if (params.to) lines.push(`<tr><td class="detail-label">To</td><td>${esc(params.to)}</td></tr>`);
+        if (params.subject) lines.push(`<tr><td class="detail-label">Subject</td><td>${esc(params.subject)}</td></tr>`);
+        if (params.body) lines.push(`<tr><td class="detail-label">Body</td><td>${esc(params.body)}</td></tr>`);
+        if (params.date_from || params.date_to) {
+            const range = [params.date_from || '...', params.date_to || '...'].join(' \u2013 ');
+            lines.push(`<tr><td class="detail-label">Date</td><td>${esc(range)}</td></tr>`);
+        }
+        if (params.attachment) lines.push(`<tr><td class="detail-label">Attachment</td><td>${esc(params.attachment)}</td></tr>`);
+        if (params.tag) lines.push(`<tr><td class="detail-label">Tag</td><td>${esc(params.tag)}</td></tr>`);
+        if (params.held) lines.push(`<tr><td class="detail-label">Held</td><td>Yes</td></tr>`);
+        if (params.has_dups) lines.push(`<tr><td class="detail-label">Duplicates</td><td>Yes</td></tr>`);
+        if (params.server_id) {
+            const srv = allServers.find(s => String(s.id) === String(params.server_id));
+            lines.push(`<tr><td class="detail-label">Server</td><td>${esc(srv ? srv.name : params.server_id)}</td></tr>`);
+        }
     }
-    if (params.attachment) lines.push(`<tr><td class="detail-label">Attachment</td><td>${esc(params.attachment)}</td></tr>`);
-    if (params.tag) lines.push(`<tr><td class="detail-label">Tag</td><td>${esc(params.tag)}</td></tr>`);
-    if (params.held) lines.push(`<tr><td class="detail-label">Held</td><td>Yes</td></tr>`);
-    if (params.has_dups) lines.push(`<tr><td class="detail-label">Duplicates</td><td>Yes</td></tr>`);
-    if (params.server_id) {
-        const srv = allServers.find(s => String(s.id) === String(params.server_id));
-        lines.push(`<tr><td class="detail-label">Server</td><td>${esc(srv ? srv.name : params.server_id)}</td></tr>`);
-    }
+
     container.innerHTML = `
         <div class="detail-section">
             <h3>Search Criteria</h3>

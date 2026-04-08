@@ -34,41 +34,58 @@
 
         <!-- Search panel (toggled) -->
         <div id="search-panel" class="search-panel hidden">
-            <div class="search-row">
-                <label class="search-label">From</label>
-                <input type="text" class="search-input" id="search-from" placeholder="Sender name or address...">
-                <label class="search-label">To</label>
-                <input type="text" class="search-input" id="search-to" placeholder="Recipient...">
+            <div class="search-mode-toggle"><a id="search-mode-link">Advanced</a></div>
+            <div id="search-basic">
+                <div class="search-row">
+                    <label class="search-label">From</label>
+                    <input type="text" class="search-input" id="search-from" placeholder="Sender name or address...">
+                    <label class="search-label">To</label>
+                    <input type="text" class="search-input" id="search-to" placeholder="Recipient...">
+                </div>
+                <div class="search-row">
+                    <label class="search-label">Subject</label>
+                    <input type="text" class="search-input" id="search-subject" placeholder="Subject...">
+                    <label class="search-label">Body</label>
+                    <input type="text" class="search-input" id="search-body" placeholder="Message text...">
+                </div>
+                <div class="search-row">
+                    <label class="search-label">Date</label>
+                    <input type="date" class="search-input search-input-sm" id="search-date-from">
+                    <span class="search-separator">&ndash;</span>
+                    <input type="date" class="search-input search-input-sm" id="search-date-to">
+                    <label class="search-label">Attachment</label>
+                    <input type="text" class="search-input search-input-sm" id="search-attachment" placeholder="filename...">
+                    <label class="search-label">Tag</label>
+                    <input type="text" class="search-input search-input-sm" id="search-tag" placeholder="tag1, tag2...">
+                </div>
+                <div class="search-row">
+                    <label class="search-label">Held</label>
+                    <input type="checkbox" id="search-held">
+                    <label class="search-label">Duplicates</label>
+                    <input type="checkbox" id="search-has-dups">
+                    <label class="search-label">Server</label>
+                    <select class="search-select" id="search-server">
+                        <option value="">All servers</option>
+                    </select>
+                    <div class="search-actions">
+                        <button class="btn btn-primary" id="search-go">Search</button>
+                        <button class="btn" id="search-clear">Clear</button>
+                        <button class="btn" id="search-save">Save</button>
+                    </div>
+                </div>
             </div>
-            <div class="search-row">
-                <label class="search-label">Subject</label>
-                <input type="text" class="search-input" id="search-subject" placeholder="Subject...">
-                <label class="search-label">Body</label>
-                <input type="text" class="search-input" id="search-body" placeholder="Message text...">
-            </div>
-            <div class="search-row">
-                <label class="search-label">Date</label>
-                <input type="date" class="search-input search-input-sm" id="search-date-from">
-                <span class="search-separator">&ndash;</span>
-                <input type="date" class="search-input search-input-sm" id="search-date-to">
-                <label class="search-label">Attachment</label>
-                <input type="text" class="search-input search-input-sm" id="search-attachment" placeholder="filename...">
-                <label class="search-label">Tag</label>
-                <input type="text" class="search-input search-input-sm" id="search-tag" placeholder="tag1, tag2...">
-            </div>
-            <div class="search-row">
-                <label class="search-label">Held</label>
-                <input type="checkbox" id="search-held">
-                <label class="search-label">Duplicates</label>
-                <input type="checkbox" id="search-has-dups">
-                <label class="search-label">Server</label>
-                <select class="search-select" id="search-server">
-                    <option value="">All servers</option>
-                </select>
-                <div class="search-actions">
-                    <button class="btn btn-primary" id="search-go">Search</button>
-                    <button class="btn" id="search-clear">Clear</button>
-                    <button class="btn" id="search-save">Save</button>
+            <div id="search-advanced" class="hidden">
+                <div id="search-conditions"></div>
+                <div class="search-row">
+                    <div class="search-add-btns">
+                        <button class="btn btn-sm" id="search-add-include">+ Include</button>
+                        <button class="btn btn-sm" id="search-add-exclude">&minus; Exclude</button>
+                    </div>
+                    <div class="search-actions">
+                        <button class="btn btn-primary" id="search-adv-go">Search</button>
+                        <button class="btn" id="search-adv-clear">Clear</button>
+                        <button class="btn" id="search-adv-save">Save</button>
+                    </div>
                 </div>
             </div>
             <p class="search-error hidden" id="search-error"></p>
