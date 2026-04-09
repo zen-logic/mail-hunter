@@ -49,9 +49,9 @@ async def sync_endpoint(request: Request):
 
     server = dict(rows[0])
 
-    if server["protocol"] == "import":
+    if server["protocol"] in ("import", "archive"):
         return JSONResponse(
-            {"error": "import-only server, cannot sync"}, status_code=400
+            {"error": f"{server['protocol']} server, cannot sync"}, status_code=400
         )
 
     full = request.query_params.get("full") == "1"

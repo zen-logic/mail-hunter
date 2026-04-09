@@ -35,7 +35,7 @@ async def _auto_sync_loop():
                 rows = await db.execute_fetchall(
                     "SELECT id, name, sync_interval "
                     "FROM servers "
-                    "WHERE protocol != 'import' AND sync_enabled = 1 "
+                    "WHERE protocol NOT IN ('import', 'archive') AND sync_enabled = 1 "
                     "ORDER BY id"
                 )
                 eligible = [dict(r) for r in rows]
