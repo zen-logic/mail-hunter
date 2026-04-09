@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mail Hunter</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" id="theme-link">
+    <script>
+        (function() {
+            var t = localStorage.getItem('mh-theme');
+            if (t && t !== 'default') {
+                document.getElementById('theme-link').href = '/static/css/themes/' + t + '.css';
+            }
+        })();
+    </script>
 </head>
 <body>
     <div id="login-screen" class="hidden"></div>

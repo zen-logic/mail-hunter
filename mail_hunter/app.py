@@ -3,7 +3,7 @@ import logging
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount, WebSocketRoute
 from starlette.staticfiles import StaticFiles
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, JSONResponse
 from pathlib import Path
 
 from cryptography.fernet import InvalidToken
@@ -71,11 +71,22 @@ from mail_hunter.services.imap import enqueue, start_next, _queue, _sync_diag
 from mail_hunter.services.auto_sync import start_auto_sync, stop_auto_sync
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+THEMES_DIR = STATIC_DIR / "css" / "themes"
 
 
 async def homepage(request):
     index = STATIC_DIR / "index.html"
     return HTMLResponse(index.read_text())
+
+
+async def list_themes(request):
+    """List available built-in themes."""
+    themes = [{"name": "default", "builtIn": True}]
+    if THEMES_DIR.is_dir():
+        for f in sorted(THEMES_DIR.iterdir()):
+            if f.suffix == ".css":
+                themes.append({"name": f.stem, "builtIn": True})
+    return JSONResponse({"ok": True, "data": themes})
 
 
 logger = logging.getLogger(__name__)
@@ -261,6 +272,7 @@ routes = [
     Route("/api/stats/servers", get_server_stats, methods=["GET"]),
     Route("/api/stats", get_stats, methods=["GET"]),
     Route("/api/version", get_version, methods=["GET"]),
+    Route("/api/themes", list_themes, methods=["GET"]),
     # Import
     Route("/api/import", import_upload, methods=["POST"]),
     Mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static"),

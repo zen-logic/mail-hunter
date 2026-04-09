@@ -1,6 +1,6 @@
 // Mail Hunter - main application entry point
 
-import { themeNames, applyTheme } from './themes.js';
+import { loadThemeNames, applyTheme } from './themes.js';
 
 // ── Auth ────────────────────────────────────────────────
 
@@ -1506,6 +1506,7 @@ async function renderSettings() {
     } catch (err) { /* empty */ }
 
     // Theme dropdown options
+    const themeNames = await loadThemeNames();
     const sorted = ['default', ...themeNames.filter(n => n !== 'default').sort()];
     const currentTheme = localStorage.getItem('mh-theme') || 'default';
     const themeOpts = sorted.map(n =>
@@ -3986,10 +3987,11 @@ function showSetupScreen() {
     document.getElementById('setup-username').focus();
 }
 
-function wireLoginThemeSelector() {
+async function wireLoginThemeSelector() {
     const sel = document.getElementById('login-theme');
     if (!sel) return;
     const saved = localStorage.getItem('mh-theme') || 'default';
+    const themeNames = await loadThemeNames();
     const sorted = ['default', ...themeNames.filter(n => n !== 'default').sort()];
     for (const name of sorted) {
         const opt = document.createElement('option');
