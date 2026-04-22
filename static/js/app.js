@@ -223,6 +223,36 @@ function showMessagePreview(mail, bodyText, bodyHtml, rawSource) {
     btnText.onclick = () => activate(btnText, previewBody);
     btnRaw.onclick = () => activate(btnRaw, previewRaw);
 
+    document.getElementById('preview-btn-print').onclick = () => {
+        const body = btnHtml.classList.contains('active')
+            ? (bodyHtml || '')
+            : `<pre style="white-space:pre-wrap;font-family:inherit;">${esc(bodyText || '')}</pre>`;
+
+        const w = window.open('', '_blank');
+        w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>${esc(mail.subject || '(no subject)')}</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 2rem auto; font-size: 14px; color: #222; }
+.subject { font-size: 1.3rem; font-weight: 700; margin-bottom: 1rem; }
+.headers { border-bottom: 1px solid #ccc; padding-bottom: 0.75rem; margin-bottom: 1rem; }
+.header-row { display: flex; gap: 0.5rem; margin-bottom: 0.2rem; }
+.header-label { color: #666; min-width: 3rem; text-align: right; }
+.header-value { color: #222; }
+@media print { body { margin: 1rem; } }
+</style></head><body>
+<div class="subject">${esc(mail.subject || '(no subject)')}</div>
+<div class="headers">
+<div class="header-row"><span class="header-label">From</span><span class="header-value">${esc(mail.from_name ? `${mail.from_name} <${mail.from_addr}>` : mail.from_addr || '')}</span></div>
+<div class="header-row"><span class="header-label">To</span><span class="header-value">${esc(mail.to_addr || '')}</span></div>
+${mail.cc_addr ? `<div class="header-row"><span class="header-label">CC</span><span class="header-value">${esc(mail.cc_addr)}</span></div>` : ''}
+<div class="header-row"><span class="header-label">Date</span><span class="header-value">${formatDate(mail.date)}</span></div>
+</div>
+<div class="body">${body}</div>
+</body></html>`);
+        w.document.close();
+        w.onload = () => w.print();
+    };
+
     modal.classList.remove('hidden');
 
     function close() {
@@ -231,6 +261,7 @@ function showMessagePreview(mail, bodyText, bodyHtml, rawSource) {
         btnHtml.onclick = null;
         btnText.onclick = null;
         btnRaw.onclick = null;
+        document.getElementById('preview-btn-print').onclick = null;
         document.getElementById('preview-close').removeEventListener('click', close);
         modal.removeEventListener('click', onBackdrop);
     }
