@@ -29,14 +29,6 @@ from mail_hunter.ws import broadcast
 logger = logging.getLogger(__name__)
 
 SORT_COLUMNS = {
-    "from": "COALESCE(NULLIF(from_name,''),from_addr)",
-    "to": "to_addr",
-    "subject": "subject",
-    "date": "date",
-    "size": "size",
-}
-# For queries using table alias "m."
-SORT_COLUMNS_M = {
     "from": "COALESCE(NULLIF(m.from_name,''),m.from_addr)",
     "to": "m.to_addr",
     "subject": "m.subject",
@@ -45,18 +37,62 @@ SORT_COLUMNS_M = {
 }
 PAGE_SIZE = 100
 
+_MAIL_LIST_COLS = (
+    "m.id, m.subject, m.from_name, m.from_addr, m.to_addr, "
+    "m.date, m.size, m.unread, m.attachment_count, m.legal_hold, m.dup_count"
+)
+
 
 def _sort_params(request):
     """Extract validated sort/page params from query string."""
     sort_key = request.query_params.get("sort", "date")
-    sort_col = SORT_COLUMNS.get(sort_key, "date")
-    sort_col_m = SORT_COLUMNS_M.get(sort_key, "m.date")
+    sort_col = SORT_COLUMNS.get(sort_key, "m.date")
     sort_dir = "ASC" if request.query_params.get("sortDir") == "asc" else "DESC"
     try:
         page = max(0, int(request.query_params.get("page", 0)))
     except (ValueError, TypeError):
         page = 0
-    return sort_col, sort_col_m, sort_dir, page
+    return sort_col, sort_dir, page
+
+
+async def _paginated_mail_query(request, from_clause, where, params, extra_cols=""):
+    """Shared paginated query for mail listings.
+
+    from_clause: e.g. "mails m" or "mails m JOIN folders f ON m.folder_id = f.id"
+    where: SQL WHERE condition (without the WHERE keyword)
+    params: query parameters as a list or tuple
+    extra_cols: additional SELECT columns, e.g. ", s.name AS server_name"
+    """
+    db = await get_db()
+    params = list(params)
+
+    ids_only = request.query_params.get("ids_only", "").strip()
+    if ids_only:
+        rows = await db.execute_fetchall(
+            f"SELECT m.id FROM {from_clause} WHERE {where}", params
+        )
+        return JSONResponse({"ids": [r["id"] for r in rows]})
+
+    sort_col, sort_dir, page = _sort_params(request)
+
+    count_row = await db.execute_fetchall(
+        f"SELECT COUNT(*) as cnt FROM {from_clause} WHERE {where}", params
+    )
+    total = count_row[0]["cnt"] if count_row else 0
+
+    rows = await db.execute_fetchall(
+        f"SELECT {_MAIL_LIST_COLS}{extra_cols} "
+        f"FROM {from_clause} WHERE {where} ORDER BY {sort_col} {sort_dir} "
+        f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
+        params,
+    )
+
+    return JSONResponse({
+        "items": [dict(r) for r in rows],
+        "total": total,
+        "page": page,
+        "pageSize": PAGE_SIZE,
+    })
 
 
 async def list_servers(request: Request):
@@ -398,22 +434,22 @@ def _build_mail_condition_sql(cond):
         if not value:
             return None, []
         pattern = f"%{value}%"
-        return "(from_name LIKE ? OR from_addr LIKE ?)", [pattern, pattern]
+        return "(m.from_name LIKE ? OR m.from_addr LIKE ?)", [pattern, pattern]
 
     elif field == "to":
         if not value:
             return None, []
-        return "to_addr LIKE ?", [f"%{value}%"]
+        return "m.to_addr LIKE ?", [f"%{value}%"]
 
     elif field == "subject":
         if not value:
             return None, []
-        return "subject LIKE ?", [f"%{value}%"]
+        return "m.subject LIKE ?", [f"%{value}%"]
 
     elif field == "body":
         if not value:
             return None, []
-        return "body_text LIKE ?", [f"%{value}%"]
+        return "m.body_text LIKE ?", [f"%{value}%"]
 
     elif field == "date":
         date_from = cond.get("from", "")
@@ -423,10 +459,10 @@ def _build_mail_condition_sql(cond):
         frags = []
         params = []
         if date_from:
-            frags.append("date >= ?")
+            frags.append("m.date >= ?")
             params.append(date_from)
         if date_to:
-            frags.append("date <= ?")
+            frags.append("m.date <= ?")
             params.append(date_to + "T23:59:59")
         return "(" + " AND ".join(frags) + ")", params
 
@@ -434,7 +470,7 @@ def _build_mail_condition_sql(cond):
         if not value:
             return None, []
         return (
-            "EXISTS (SELECT 1 FROM attachments a WHERE a.mail_id = mails.id AND a.filename LIKE ?)",
+            "EXISTS (SELECT 1 FROM attachments a WHERE a.mail_id = m.id AND a.filename LIKE ?)",
             [f"%{value}%"],
         )
 
@@ -448,7 +484,7 @@ def _build_mail_condition_sql(cond):
         params = []
         for tag in tag_list:
             frags.append(
-                "EXISTS (SELECT 1 FROM tags t WHERE t.mail_id = mails.id AND t.tag LIKE ?)"
+                "EXISTS (SELECT 1 FROM tags t WHERE t.mail_id = m.id AND t.tag LIKE ?)"
             )
             params.append(tag)
         return "(" + " AND ".join(frags) + ")", params
@@ -456,7 +492,7 @@ def _build_mail_condition_sql(cond):
     elif field == "server":
         if not value:
             return None, []
-        return "server_id = ?", [value]
+        return "m.server_id = ?", [value]
 
     elif field == "held":
         return "legal_hold = 1", []
@@ -499,86 +535,56 @@ async def _search_mails_basic(request: Request):
     params = []
 
     if server_id:
-        conditions.append("server_id = ?")
+        conditions.append("m.server_id = ?")
         params.append(server_id)
 
     if from_q:
-        conditions.append("(from_name LIKE ? OR from_addr LIKE ?)")
+        conditions.append("(m.from_name LIKE ? OR m.from_addr LIKE ?)")
         pattern = f"%{from_q}%"
         params.extend([pattern, pattern])
 
     if to_q:
-        conditions.append("to_addr LIKE ?")
+        conditions.append("m.to_addr LIKE ?")
         params.append(f"%{to_q}%")
 
     if subject_q:
-        conditions.append("subject LIKE ?")
+        conditions.append("m.subject LIKE ?")
         params.append(f"%{subject_q}%")
 
     if body_q:
-        conditions.append("body_text LIKE ?")
+        conditions.append("m.body_text LIKE ?")
         params.append(f"%{body_q}%")
 
     if date_from:
-        conditions.append("date >= ?")
+        conditions.append("m.date >= ?")
         params.append(date_from)
 
     if date_to:
-        conditions.append("date <= ?")
+        conditions.append("m.date <= ?")
         params.append(date_to + "T23:59:59")
 
     if tag_q:
         for tag in [t.strip() for t in tag_q.split(",") if t.strip()]:
             conditions.append(
-                "EXISTS (SELECT 1 FROM tags t WHERE t.mail_id = mails.id AND t.tag LIKE ?)"
+                "EXISTS (SELECT 1 FROM tags t WHERE t.mail_id = m.id AND t.tag LIKE ?)"
             )
             params.append(tag)
 
     if held_q:
-        conditions.append("legal_hold = 1")
+        conditions.append("m.legal_hold = 1")
 
     if has_dups:
-        conditions.append("dup_count > 0")
+        conditions.append("m.dup_count > 0")
 
     if attachment_q:
         conditions.append(
-            "EXISTS (SELECT 1 FROM attachments a WHERE a.mail_id = mails.id AND a.filename LIKE ?)"
+            "EXISTS (SELECT 1 FROM attachments a WHERE a.mail_id = m.id AND a.filename LIKE ?)"
         )
         params.append(f"%{attachment_q}%")
 
     where = " AND ".join(conditions)
 
-    db = await get_db()
-
-    ids_only = request.query_params.get("ids_only", "").strip()
-    if ids_only:
-        rows = await db.execute_fetchall(
-            f"SELECT id FROM mails WHERE {where}", params
-        )
-        return JSONResponse({"ids": [r["id"] for r in rows]})
-
-    sort_col, _sort_col_m, sort_dir, page = _sort_params(request)
-
-    count_row = await db.execute_fetchall(
-        f"SELECT COUNT(*) as cnt FROM mails WHERE {where}", params
-    )
-    total = count_row[0]["cnt"] if count_row else 0
-
-    rows = await db.execute_fetchall(
-        "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count, legal_hold, dup_count "
-        f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
-        f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
-        params,
-    )
-
-    return JSONResponse(
-        {
-            "items": [dict(r) for r in rows],
-            "total": total,
-            "page": page,
-            "pageSize": PAGE_SIZE,
-        }
-    )
+    return await _paginated_mail_query(request, "mails m", where, params)
 
 
 async def _search_mails_advanced(request: Request):
@@ -602,139 +608,41 @@ async def _search_mails_advanced(request: Request):
 
     where = " AND ".join(where_parts)
 
-    db = await get_db()
-
-    ids_only = request.query_params.get("ids_only", "").strip()
-    if ids_only:
-        rows = await db.execute_fetchall(
-            f"SELECT id FROM mails WHERE {where}", where_params
-        )
-        return JSONResponse({"ids": [r["id"] for r in rows]})
-
-    sort_col, _sort_col_m, sort_dir, page = _sort_params(request)
-
-    count_row = await db.execute_fetchall(
-        f"SELECT COUNT(*) as cnt FROM mails WHERE {where}", where_params
-    )
-    total = count_row[0]["cnt"] if count_row else 0
-
-    rows = await db.execute_fetchall(
-        "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count, legal_hold, dup_count "
-        f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
-        f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
-        where_params,
-    )
-
-    return JSONResponse(
-        {
-            "items": [dict(r) for r in rows],
-            "total": total,
-            "page": page,
-            "pageSize": PAGE_SIZE,
-        }
-    )
+    return await _paginated_mail_query(request, "mails m", where, where_params)
 
 
 async def list_mails(request: Request):
     server_id = request.path_params["server_id"]
     folder = request.query_params.get("folder")
+
+    if not folder:
+        return await _paginated_mail_query(
+            request, "mails m", "m.server_id = ?", [server_id]
+        )
+
     db = await get_db()
-    ids_only = request.query_params.get("ids_only", "").strip()
+    tag_row = await db.execute_fetchall(
+        "SELECT label_tag FROM folders WHERE server_id = ? AND name = ?",
+        (server_id, folder),
+    )
+    label_tag = tag_row[0]["label_tag"] if tag_row and tag_row[0]["label_tag"] else None
 
-    if folder:
-        # Check if this is a virtual (label-backed) folder
-        tag_row = await db.execute_fetchall(
-            "SELECT label_tag FROM folders WHERE server_id = ? AND name = ?",
-            (server_id, folder),
+    if label_tag:
+        where = ("m.server_id = ? AND EXISTS "
+                 "(SELECT 1 FROM tags t WHERE t.mail_id = m.id AND t.tag = ?)")
+        return await _paginated_mail_query(
+            request, "mails m", where, [server_id, label_tag]
         )
-        label_tag = tag_row[0]["label_tag"] if tag_row and tag_row[0]["label_tag"] else None
 
-        if label_tag:
-            if ids_only:
-                rows = await db.execute_fetchall(
-                    "SELECT m.id FROM mails m "
-                    "WHERE m.server_id = ? AND EXISTS "
-                    "(SELECT 1 FROM tags t WHERE t.mail_id = m.id AND t.tag = ?)",
-                    (server_id, label_tag),
-                )
-                return JSONResponse({"ids": [r["id"] for r in rows]})
-            # Virtual folder — query by tag
-            sort_col, sort_col_m, sort_dir, page = _sort_params(request)
-            count_row = await db.execute_fetchall(
-                "SELECT COUNT(*) as cnt FROM mails m "
-                "WHERE m.server_id = ? AND EXISTS "
-                "(SELECT 1 FROM tags t WHERE t.mail_id = m.id AND t.tag = ?)",
-                (server_id, label_tag),
-            )
-            total = count_row[0]["cnt"] if count_row else 0
-            rows = await db.execute_fetchall(
-                "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, "
-                "m.size, m.unread, m.attachment_count, m.legal_hold, m.dup_count "
-                "FROM mails m WHERE m.server_id = ? AND EXISTS "
-                "(SELECT 1 FROM tags t WHERE t.mail_id = m.id AND t.tag = ?) "
-                f"ORDER BY {sort_col_m} {sort_dir} "
-                f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
-                (server_id, label_tag),
-            )
-        else:
-            # Real folder — match exact name, plus children for non-INBOX folders.
-            # INBOX is a namespace prefix in IMAP (INBOX.Sent, INBOX.Drafts etc.)
-            # so LIKE patterns would match every folder in the account.
-            if folder == "INBOX":
-                where = "m.server_id = ? AND f.name = ?"
-                params = (server_id, folder)
-            else:
-                where = "m.server_id = ? AND (f.name = ? OR f.name LIKE ? OR f.name LIKE ?)"
-                params = (server_id, folder, f"{folder}/%", f"{folder}.%")
-            if ids_only:
-                rows = await db.execute_fetchall(
-                    "SELECT m.id FROM mails m JOIN folders f ON m.folder_id = f.id "
-                    f"WHERE {where}",
-                    params,
-                )
-                return JSONResponse({"ids": [r["id"] for r in rows]})
-            sort_col, sort_col_m, sort_dir, page = _sort_params(request)
-            count_row = await db.execute_fetchall(
-                "SELECT COUNT(*) as cnt FROM mails m JOIN folders f ON m.folder_id = f.id "
-                f"WHERE {where}",
-                params,
-            )
-            total = count_row[0]["cnt"] if count_row else 0
-            rows = await db.execute_fetchall(
-                "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, m.size, "
-                "m.unread, m.attachment_count, m.legal_hold, m.dup_count "
-                "FROM mails m JOIN folders f ON m.folder_id = f.id "
-                f"WHERE {where} ORDER BY {sort_col_m} {sort_dir} "
-                f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
-                params,
-            )
+    if folder == "INBOX":
+        where = "m.server_id = ? AND f.name = ?"
+        params = [server_id, folder]
     else:
-        where = "server_id = ?"
-        params = (server_id,)
-        if ids_only:
-            rows = await db.execute_fetchall(
-                f"SELECT id FROM mails WHERE {where}", params
-            )
-            return JSONResponse({"ids": [r["id"] for r in rows]})
-        sort_col, sort_col_m, sort_dir, page = _sort_params(request)
-        count_row = await db.execute_fetchall(
-            f"SELECT COUNT(*) as cnt FROM mails WHERE {where}", params
-        )
-        total = count_row[0]["cnt"] if count_row else 0
-        rows = await db.execute_fetchall(
-            "SELECT id, subject, from_name, from_addr, to_addr, date, size, unread, attachment_count, legal_hold, dup_count "
-            f"FROM mails WHERE {where} ORDER BY {sort_col} {sort_dir} "
-            f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
-            params,
-        )
+        where = "m.server_id = ? AND (f.name = ? OR f.name LIKE ? OR f.name LIKE ?)"
+        params = [server_id, folder, f"{folder}/%", f"{folder}.%"]
 
-    return JSONResponse(
-        {
-            "items": [dict(r) for r in rows],
-            "total": total,
-            "page": page,
-            "pageSize": PAGE_SIZE,
-        }
+    return await _paginated_mail_query(
+        request, "mails m JOIN folders f ON m.folder_id = f.id", where, params
     )
 
 
@@ -1195,9 +1103,7 @@ async def get_mail_thread(request: Request):
 
     placeholders = ",".join("?" for _ in related)
     rows = await db.execute_fetchall(
-        "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, "
-        "m.size, m.unread, m.attachment_count, m.legal_hold, m.dup_count, "
-        "s.name AS server_name, f.name AS folder_name "
+        f"SELECT {_MAIL_LIST_COLS}, s.name AS server_name, f.name AS folder_name "
         "FROM mails m "
         "LEFT JOIN servers s ON m.server_id = s.id "
         "LEFT JOIN folders f ON m.folder_id = f.id "
@@ -1212,7 +1118,6 @@ async def get_mail_thread(request: Request):
 async def get_mail_duplicates(request: Request):
     """Return other mails with the same message_id or content_hash."""
     mail_id = request.path_params["mail_id"]
-    sort_col, sort_col_m, sort_dir, page = _sort_params(request)
     db = await get_db()
 
     row = await db.execute_fetchall(
@@ -1224,7 +1129,6 @@ async def get_mail_duplicates(request: Request):
     message_id = row[0]["message_id"]
     content_hash = row[0]["content_hash"]
 
-    # Prefer message_id match, fall back to content_hash
     if message_id:
         match_clause = "m.message_id = ?"
         match_param = message_id
@@ -1236,33 +1140,15 @@ async def get_mail_duplicates(request: Request):
             {"items": [], "total": 0, "page": 0, "pageSize": PAGE_SIZE}
         )
 
+    from_clause = ("mails m "
+                    "LEFT JOIN servers s ON m.server_id = s.id "
+                    "LEFT JOIN folders f ON m.folder_id = f.id")
     where = f"{match_clause} AND m.id != ?"
     params = [match_param, mail_id]
 
-    count_row = await db.execute_fetchall(
-        f"SELECT COUNT(*) as cnt FROM mails m WHERE {where}", params
-    )
-    total = count_row[0]["cnt"] if count_row else 0
-
-    rows = await db.execute_fetchall(
-        "SELECT m.id, m.subject, m.from_name, m.from_addr, m.to_addr, m.date, "
-        "m.size, m.unread, m.attachment_count, m.legal_hold, m.dup_count, "
-        "s.name AS server_name, f.name AS folder_name "
-        "FROM mails m "
-        "LEFT JOIN servers s ON m.server_id = s.id "
-        "LEFT JOIN folders f ON m.folder_id = f.id "
-        f"WHERE {where} ORDER BY {sort_col_m} {sort_dir} "
-        f"LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}",
-        params,
-    )
-
-    return JSONResponse(
-        {
-            "items": [dict(r) for r in rows],
-            "total": total,
-            "page": page,
-            "pageSize": PAGE_SIZE,
-        }
+    return await _paginated_mail_query(
+        request, from_clause, where, params,
+        extra_cols=", s.name AS server_name, f.name AS folder_name"
     )
 
 
