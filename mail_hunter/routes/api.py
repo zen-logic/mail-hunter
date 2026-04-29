@@ -677,9 +677,15 @@ async def list_mails(request: Request):
                 (server_id, label_tag),
             )
         else:
-            # Real folder — match the folder itself plus any children (separated by / or .)
-            where = "m.server_id = ? AND (f.name = ? OR f.name LIKE ? OR f.name LIKE ?)"
-            params = (server_id, folder, f"{folder}/%", f"{folder}.%")
+            # Real folder — match exact name, plus children for non-INBOX folders.
+            # INBOX is a namespace prefix in IMAP (INBOX.Sent, INBOX.Drafts etc.)
+            # so LIKE patterns would match every folder in the account.
+            if folder == "INBOX":
+                where = "m.server_id = ? AND f.name = ?"
+                params = (server_id, folder)
+            else:
+                where = "m.server_id = ? AND (f.name = ? OR f.name LIKE ? OR f.name LIKE ?)"
+                params = (server_id, folder, f"{folder}/%", f"{folder}.%")
             if ids_only:
                 rows = await db.execute_fetchall(
                     "SELECT m.id FROM mails m JOIN folders f ON m.folder_id = f.id "
