@@ -2133,8 +2133,15 @@ function buildFolderTree(folders) {
     }
 
     for (const f of sorted) {
-        const node = { name: f.name, fullName: f.name, children: [], count: f.count ?? 0 };
-        const result = findOrCreateParent(f.name);
+        // Treat INBOX. as a namespace prefix, not a hierarchy level.
+        // "INBOX.Sent" becomes "Sent" at the root, not a child of INBOX.
+        let displayName = f.name;
+        if (f.name.startsWith('INBOX.') || f.name.startsWith('INBOX/')) {
+            displayName = f.name.slice(6);
+        }
+
+        const node = { name: displayName, fullName: f.name, children: [], count: f.count ?? 0 };
+        const result = (displayName === f.name) ? findOrCreateParent(f.name) : null;
 
         if (result) {
             node.name = f.name.slice(result.prefixLen + 1);
