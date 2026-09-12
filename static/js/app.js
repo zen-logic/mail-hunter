@@ -439,6 +439,12 @@ function connectWS() {
         wsRetryDelay = 1000;
         statusDot.classList.add('connected');
         statusLabel.textContent = 'Connected';
+        // Clear stale sync state — the server replays what's actually active
+        syncingServerIds.clear();
+        queuedServerIds.clear();
+        cancellingServerIds.clear();
+        renderServers(allServers);
+        if (selectedServerId) renderServerDetail();
     });
 
     ws.addEventListener('close', () => {
